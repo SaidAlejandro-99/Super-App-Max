@@ -1,268 +1,783 @@
 // SuperApp Integrada — Planta Súper Sacos
-// Módulo 1: Métodos y Tiempos (primera versión: login + visor de solo lectura)
+// Módulo 1: Métodos y Tiempos. Es el mismo panel del artefacto original
+// ("Tiempos y Movimientos SS"), pero los datos viven en Supabase.
 import { supabase } from './supabaseClient.js'
 
-const app = document.getElementById('app')
-
-// Estado en memoria
-const state = {
-  session: null,
-  perfil: null,      // { nombre, rol }
-  codigos: [],       // lista de códigos
-  tiposOp: {},       // nombre operación -> tipo (Costura/Manual)
-  minPorCodigo: {},  // codigo -> { total, costura, ops }
-  filtro: '',
-  codigoAbierto: null,
+/* ---------- estado ---------- */
+const D = {
+  operaciones: [],   // [{nombre, familia, tipo}]
+  codigos: {},       // codigo -> {codigo, cliente, descripcion, linea}
+  tiempos: {},       // codigo -> [{op, min, obs, val, supl, muestras, ts}]
+  actualizado: {},   // codigo -> ISO de la última edición de sus tiempos
+  planning: [],      // [{codigo, cliente, descripcion, linea, prox_fab, ult_fab, veces}]
+  corte_planning: '',
 }
+let ROLE = null, PERFIL = null, dbReady = false
+let swTimer = null, swRunning = false, swBase = 0, swAcc = 0, swSamples = [], swMax = 5, swRowIndex = -1, swOp = '', swHadPrev = false, swConfirmed = false
+let curTab = 'resumen', curCode = null, codeFilter = { q: '', cli: '', estado: '' }, opFilter = { q: '', fam: '', tipo: '' }
 
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
-  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
-))
-const fmt = (n, d = 2) => (typeof n === 'number' && !isNaN(n)) ? n.toFixed(d) : '—'
+/* ---------- utilidades de datos ---------- */
+function opList() { return D.operaciones }
+let _tipoMap = null
+function tipoMap() { const m = {}; opList().forEach(o => m[o.nombre] = o.tipo); return m }
+function tipoOf(nombre) { return (_tipoMap || (_tipoMap = tipoMap()))[nombre] || '' }
+function invalidateMaps() { _tipoMap = null }
 
-// ---------- Arranque ----------
-init()
-
-async function init() {
-  const { data } = await supabase.auth.getSession()
-  state.session = data.session
-  supabase.auth.onAuthStateChange((_evt, session) => {
-    state.session = session
-    if (session) entrarApp()
-    else renderLogin()
-  })
-  if (state.session) entrarApp()
-  else renderLogin()
+function codigos() {
+  return Object.values(D.codigos).sort((a, b) => (a.cliente || '').localeCompare(b.cliente || '') || a.codigo.localeCompare(b.codigo))
 }
+function codigoByCode(code) { return D.codigos[code] || null }
+function tiemposOf(code) { return D.tiempos[code] || [] }
+function hasTiempos(code) { return tiemposOf(code).length > 0 }
+function fmtDateShort(iso) { if (!iso) return ''; const d = new Date(iso); if (isNaN(d.getTime())) return ''; return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getFullYear()).slice(2) }
+function ultAct(code) { return fmtDateShort(D.actualizado[code]) }
+function statusCode(code) { const r = tiemposOf(code); if (!r.length) return 'sin'; return r.every(x => typeof x.min === 'number' && !isNaN(x.min)) ? 'completo' : 'incompleto' }
+function estadoPill(code) { const s = statusCode(code); return s === 'completo' ? '<span class="pill si">Completo</span>' : (s === 'incompleto' ? '<span class="pill inc">Incompleto</span>' : '<span class="pill no">Sin estudio</span>') }
+function codeInfo(code) { return codigoByCode(code) || D.planning.find(p => p.codigo === code) || { codigo: code, cliente: '', descripcion: '', linea: '' } }
+function futuras() { return D.planning.map(p => ({ codigo: p.codigo, cliente: p.cliente, descripcion: p.descripcion, linea: p.linea, prox_fab: p.prox_fab, estado: statusCode(p.codigo), costura: costuraTotal(p.codigo) })) }
+function maxUlt() { return D.planning.reduce((m, p) => (p.ult_fab || '') > m ? p.ult_fab : m, '') }
+function costuraTotal(code) { return tiemposOf(code).reduce((s, r) => tipoOf(r.op) === 'Costura' ? s + (+r.min || 0) : s, 0) }
+function nOpsCostura(code) { return tiemposOf(code).filter(r => tipoOf(r.op) === 'Costura').length }
+function uph(min) { return (typeof min === 'number' && min > 0) ? 60 / min : null }
+const num = v => (v == null || v === '') ? null : Number(v)
 
-// ---------- Login ----------
-function renderLogin(errMsg) {
-  app.innerHTML = `
-    <div class="login-wrap">
-      <form class="login-card" id="loginForm">
-        <h1>SuperApp</h1>
-        <p class="sub">Planta Súper Sacos · Poliplastics S.A.S.</p>
-        ${errMsg ? `<div class="login-error">${esc(errMsg)}</div>` : ''}
-        <div class="field">
-          <label for="email">Correo</label>
-          <input id="email" type="email" autocomplete="username" required />
-        </div>
-        <div class="field">
-          <label for="pass">Contraseña</label>
-          <input id="pass" type="password" autocomplete="current-password" required />
-        </div>
-        <button class="btn btn-primary" type="submit" id="loginBtn">Entrar</button>
-      </form>
-    </div>`
-  document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault()
-    const btn = document.getElementById('loginBtn')
-    const email = document.getElementById('email').value.trim()
-    const password = document.getElementById('pass').value
-    btn.disabled = true
-    btn.textContent = 'Entrando…'
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) {
-      renderLogin('Correo o contraseña incorrectos.')
-    }
-    // Si entra bien, onAuthStateChange dispara entrarApp()
-  })
-}
-
-// ---------- App autenticada ----------
-async function entrarApp() {
-  app.innerHTML = `<div class="loading">Cargando…</div>`
-  // Perfil del usuario (rol)
-  const { data: perfil } = await supabase
-    .from('perfiles')
-    .select('nombre, rol')
-    .eq('id', state.session.user.id)
-    .maybeSingle()
-  state.perfil = perfil || { nombre: state.session.user.email, rol: 'sin-rol' }
-
-  await cargarDatos()
-  renderCodigos()
-}
-
-async function cargarDatos() {
-  // Operaciones (para saber tipo Costura/Manual)
-  const { data: ops } = await supabase.from('operaciones').select('nombre, tipo')
-  state.tiposOp = {}
-  for (const o of ops || []) state.tiposOp[o.nombre] = o.tipo
-
-  // Códigos
-  const { data: cods } = await supabase
-    .from('codigos')
-    .select('codigo, cliente, descripcion, linea')
-    .order('codigo')
-  state.codigos = cods || []
-
-  // Tiempos (solo lo necesario para totales): codigo, operacion, min
-  state.minPorCodigo = {}
-  const { data: tiempos } = await supabase
-    .from('tiempos')
-    .select('codigo, operacion, min')
-  for (const t of tiempos || []) {
-    const agg = state.minPorCodigo[t.codigo] || { total: 0, costura: 0, ops: 0 }
-    const m = typeof t.min === 'number' ? t.min : 0
-    agg.total += m
-    agg.ops += 1
-    if (state.tiposOp[t.operacion] === 'Costura') agg.costura += m
-    state.minPorCodigo[t.codigo] = agg
+/* ---------- Supabase: carga ---------- */
+// Supabase entrega máximo 1000 filas por consulta; se pide por páginas.
+async function fetchAll(table, select, order) {
+  const out = []
+  for (let from = 0; ; from += 1000) {
+    let q = supabase.from(table).select(select).range(from, from + 999)
+    for (const o of order) q = q.order(o)
+    const { data, error } = await q
+    if (error) throw error
+    out.push(...data)
+    if (data.length < 1000) return out
   }
 }
 
-function topbar() {
-  const p = state.perfil
-  return `
-    <div class="topbar">
-      <div class="brand">SuperApp <small>Métodos y Tiempos</small></div>
-      <div class="user">
-        <span>${esc(p.nombre || '')}</span>
-        <span class="rol">${esc(p.rol || '')}</span>
-        <button class="btn-ghost" id="logoutBtn">Salir</button>
-      </div>
-    </div>`
+async function loadAll() {
+  dbReady = false; render()
+  try {
+    const [ops, cods, ts, plan, cfg] = await Promise.all([
+      fetchAll('operaciones', 'nombre, familia, tipo', ['nombre']),
+      fetchAll('codigos', 'codigo, cliente, descripcion, linea, tiempos_updated_at', ['codigo']),
+      fetchAll('tiempos', 'codigo, operacion, min, obs, val, supl, muestras, orden, tomado_at', ['codigo', 'orden']),
+      fetchAll('planning', 'codigo, cliente, descripcion, linea, prox_fab, ult_fab, veces, orden', ['orden']),
+      fetchAll('config', 'clave, valor', ['clave']),
+    ])
+    D.operaciones = ops
+    D.codigos = {}; D.actualizado = {}
+    cods.forEach(c => {
+      D.codigos[c.codigo] = { codigo: c.codigo, cliente: c.cliente, descripcion: c.descripcion, linea: c.linea }
+      if (c.tiempos_updated_at) D.actualizado[c.codigo] = c.tiempos_updated_at
+    })
+    D.tiempos = {}
+    ts.forEach(t => {
+      ;(D.tiempos[t.codigo] ||= []).push({
+        op: t.operacion, min: num(t.min), obs: num(t.obs), val: num(t.val), supl: num(t.supl),
+        muestras: Array.isArray(t.muestras) ? t.muestras : [], ts: t.tomado_at || undefined,
+      })
+    })
+    D.planning = plan
+    const corte = cfg.find(c => c.clave === 'corte_planning')
+    D.corte_planning = corte ? corte.valor : ''
+    invalidateMaps()
+  } catch (e) {
+    console.error(e)
+    toast('No se pudieron cargar los datos. Revisa la conexión.')
+  }
+  dbReady = true; render()
 }
 
-function wireTopbar() {
-  const b = document.getElementById('logoutBtn')
-  if (b) b.addEventListener('click', () => supabase.auth.signOut())
+/* ---------- Supabase: escritura ---------- */
+function requireWrite() {
+  if (ROLE !== 'admin') { toast('Modo visita: solo lectura.'); return false }
+  return true
+}
+async function saveTiempos(code, rows) {
+  if (!requireWrite()) return false
+  const { error } = await supabase.rpc('guardar_tiempos', { p_codigo: code, p_rows: rows })
+  if (error) { console.error(error); toast('No se pudo guardar. Intenta de nuevo.'); return false }
+  D.tiempos[code] = rows.map(r => ({ ...r }))
+  D.actualizado[code] = new Date().toISOString()
+  if (!codigoByCode(code)) {
+    const p = D.planning.find(x => x.codigo === code)
+    D.codigos[code] = { codigo: code, cliente: p ? p.cliente : '', descripcion: p ? p.descripcion : '', linea: p ? p.linea : '' }
+  }
+  render()
+  return true
+}
+async function saveCodigo(obj) {
+  if (!requireWrite()) return false
+  const { error } = await supabase.from('codigos').upsert({ ...obj, updated_at: new Date().toISOString() })
+  if (error) { console.error(error); toast('No se pudo guardar el código.'); return false }
+  D.codigos[obj.codigo] = { ...obj }
+  render()
+  return true
+}
+async function saveOperacion(rec) {
+  if (!requireWrite()) return false
+  const { error } = await supabase.from('operaciones').upsert({ ...rec, updated_at: new Date().toISOString() })
+  if (error) { console.error(error); toast('No se pudo guardar la operación.'); return false }
+  const ix = D.operaciones.findIndex(x => x.nombre === rec.nombre)
+  if (ix >= 0) D.operaciones[ix] = rec; else D.operaciones.push(rec)
+  invalidateMaps(); render()
+  return true
 }
 
-// ---------- Vista: lista de códigos ----------
+/* ---------- toast / modal ---------- */
+let toastT = null
+function toast(msg) { const n = document.getElementById('notice'); n.textContent = msg; n.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => n.classList.remove('show'), 2600) }
+function openModal(html, wide) { const m = document.getElementById('modal'); m.innerHTML = html; m.classList.toggle('wide', !!wide); document.getElementById('modalBg').classList.add('open') }
+function closeModal() { try { clearInterval(swTimer) } catch (e) {} swRunning = false; document.getElementById('modalBg').classList.remove('open') }
+document.getElementById('modalBg').addEventListener('click', e => { if (e.target.id === 'modalBg') closeModal() })
+
+/* ---------- helpers de formato ---------- */
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const fmt = (n, d = 2) => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('es-CO', { minimumFractionDigits: d, maximumFractionDigits: d })
+const fmt0 = n => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString('es-CO')
+const loadingHtml = '<div class="loading">Cargando datos…</div>'
+
+/* ---------- RESUMEN ---------- */
+function renderResumen() {
+  const el = document.getElementById('p-resumen')
+  if (!dbReady) { el.innerHTML = loadingHtml; return }
+  const cods = codigos()
+  const comp = cods.filter(c => statusCode(c.codigo) === 'completo').length
+  const inc = cods.filter(c => statusCode(c.codigo) === 'incompleto').length
+  const sinE = cods.length - comp - inc
+  const ops = opList(); const nCos = ops.filter(o => o.tipo === 'Costura').length
+  const fut = futuras(); const fComp = fut.filter(f => f.estado === 'completo').length; const fFalta = fut.length - fComp
+  const pct = fut.length ? Math.round(100 * fComp / fut.length) : 0
+  const faltan = fut.filter(f => f.estado !== 'completo')
+  el.innerHTML = `
+  <div class="grid kpis">
+    <div class="kpi accent"><div class="label">Códigos registrados</div><div class="value">${fmt0(cods.length)}</div><div class="sub">de ${fmt0(new Set(cods.map(c => c.cliente)).size)} clientes</div></div>
+    <div class="kpi good"><div class="label">Tiempos completos</div><div class="value">${fmt0(comp)}</div><div class="sub">${cods.length ? Math.round(100 * comp / cods.length) : 0}% del total</div></div>
+    <div class="kpi bad"><div class="label">Faltan por completar</div><div class="value">${fmt0(inc + sinE)}</div><div class="sub">${inc} incompletos · ${sinE} sin estudio</div></div>
+    <div class="kpi"><div class="label">Operaciones</div><div class="value">${fmt0(ops.length)}</div><div class="sub">${nCos} de costura</div></div>
+  </div>
+
+  <div class="section">
+    <h2>Producción futura — cobertura de tiempos</h2>
+    <div class="hint">Todos los códigos que vienen de hoy en adelante según el plan (MAESTRO_PROG), hasta ${esc(maxUlt())}. Corte del plan: ${esc(D.corte_planning)}.</div>
+    <div class="grid kpis" style="margin-bottom:14px">
+      <div class="kpi accent click" data-tab-go="futura" title="Ver todos"><div class="label">Códigos a fabricar</div><div class="value">${fmt0(fut.length)}</div><div class="sub">toca para ver la lista →</div></div>
+      <div class="kpi good"><div class="label">Con tiempos completos</div><div class="value">${pct}%</div><div class="sub">${fComp} códigos</div></div>
+      <div class="kpi bad"><div class="label">Faltan</div><div class="value">${100 - pct}%</div><div class="sub">${fFalta} códigos a priorizar</div></div>
+    </div>
+    <div class="bar"><i class="b-si" style="width:${pct}%"></i><i class="b-no" style="width:${100 - pct}%"></i></div>
+    <div class="legend"><span><i class="dot" style="background:var(--good)"></i>Completos</span><span><i class="dot" style="background:var(--amber)"></i>Faltan (sin estudio o incompletos)</span></div>
+  </div>
+
+  <div class="section">
+    <h2>A estudiar primero (${faltan.length})</h2>
+    <div class="hint">Lo que viene y todavía no tiene los tiempos completos, por orden de próxima fabricación. Un código con operaciones pero sin todos los minutos cuenta como incompleto.</div>
+    ${faltan.length ? `<div class="tablebox"><table><thead><tr><th>Código</th><th>Cliente</th><th>Descripción</th><th>Línea</th><th>Estado</th><th></th></tr></thead><tbody>
+      ${faltan.map(f => `<tr><td class="codecell">${esc(f.codigo)}</td><td>${esc(f.cliente)}</td><td class="muted">${esc(f.descripcion)}</td><td>${esc(f.linea)}</td><td>${estadoPill(f.codigo)}</td>
+        <td><button class="btn sm" data-go="${esc(f.codigo)}">Registrar</button></td></tr>`).join('')}
+    </tbody></table></div>` : `<div class="empty">Todo lo que viene ya tiene tiempos completos. 🎯</div>`}
+  </div>
+
+  <div class="section">
+    <h2>Para actualizar el plan</h2>
+    <div class="hint">La producción futura es una foto del plan. Cuando cambie en Teams, súbeme el MAESTRO_PROG y lo recargo. El resto del panel (códigos, tiempos, operaciones) vive permanente aquí.</div>
+  </div>`
+}
+
+let futFilter = ''
+function renderFutura() {
+  const el = document.getElementById('p-futura')
+  if (!dbReady) { el.innerHTML = loadingHtml; return }
+  const all = futuras()
+  let rows = all
+  if (futFilter === 'completo') rows = all.filter(f => f.estado === 'completo')
+  if (futFilter === 'falta') rows = all.filter(f => f.estado !== 'completo')
+  el.innerHTML = `
+  <div class="section">
+    <h2>Producción futura (${all.length})</h2>
+    <div class="hint">Códigos que vienen de hoy en adelante según el plan, ordenados por próxima fabricación. Hasta ${esc(maxUlt())}. Corte ${esc(D.corte_planning)}.</div>
+    <div class="controls">
+      <select id="ff"><option value="">Todos (${all.length})</option><option value="falta">Faltan — sin estudio o incompletos (${all.filter(f => f.estado !== 'completo').length})</option><option value="completo">Completos (${all.filter(f => f.estado === 'completo').length})</option></select>
+    </div>
+    <div class="tablebox"><table>
+      <thead><tr><th>Código</th><th>Cliente</th><th>Descripción</th><th>Línea</th><th>Estado</th><th class="num">Costura (min)</th><th></th></tr></thead>
+      <tbody>${rows.map(f => `<tr>
+        <td class="codecell"><span class="linkish" data-go="${esc(f.codigo)}">${esc(f.codigo)}</span></td>
+        <td>${esc(f.cliente)}</td><td class="muted">${esc(f.descripcion)}</td><td>${esc(f.linea)}</td>
+        <td>${estadoPill(f.codigo)}</td><td class="num">${f.estado === 'sin' ? '—' : fmt(f.costura)}</td>
+        <td><button class="btn sm" data-go="${esc(f.codigo)}">${f.estado === 'completo' ? 'Ver' : 'Registrar'}</button></td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="count">${rows.length} de ${all.length} códigos</div>
+  </div>`
+  const sel = document.getElementById('ff'); sel.value = futFilter; sel.addEventListener('change', e => { futFilter = e.target.value; renderFutura() })
+}
+
+/* ---------- CÓDIGOS ---------- */
 function renderCodigos() {
-  state.codigoAbierto = null
-  const f = state.filtro.trim().toLowerCase()
-  const lista = state.codigos.filter((c) => {
-    if (!f) return true
-    return (
-      c.codigo.toLowerCase().includes(f) ||
-      (c.cliente || '').toLowerCase().includes(f) ||
-      (c.descripcion || '').toLowerCase().includes(f)
-    )
-  })
-
-  app.innerHTML = `
-    ${topbar()}
-    <div class="container">
-      <div class="toolbar">
-        <input class="search" id="search" placeholder="Buscar por código, cliente o descripción…" value="${esc(state.filtro)}" />
-        <span class="count">${lista.length} de ${state.codigos.length} códigos</span>
-      </div>
-      <div class="tablebox">
-        <table>
-          <thead>
-            <tr>
-              <th>Código</th>
-              <th>Cliente</th>
-              <th class="hide-mobile">Descripción</th>
-              <th class="num">Costura (min)</th>
-              <th class="num hide-mobile">Total (min)</th>
-              <th>Estado</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${lista.map(filaCodigo).join('') || `<tr><td colspan="6"><div class="empty">Sin resultados.</div></td></tr>`}
-          </tbody>
-        </table>
-      </div>
-    </div>`
-
-  wireTopbar()
-  const s = document.getElementById('search')
-  s.addEventListener('input', (e) => {
-    state.filtro = e.target.value
-    renderCodigos()
-    // Mantener foco al re-renderizar
-    const ns = document.getElementById('search')
-    ns.focus()
-    ns.setSelectionRange(ns.value.length, ns.value.length)
-  })
-  document.querySelectorAll('[data-codigo]').forEach((el) =>
-    el.addEventListener('click', () => abrirCodigo(el.getAttribute('data-codigo')))
-  )
+  const el = document.getElementById('p-codigos')
+  if (!dbReady) { el.innerHTML = loadingHtml; return }
+  if (curCode) { renderEditor(el); return }
+  const clientes = [...new Set(codigos().map(c => c.cliente))].sort()
+  el.innerHTML = `
+  <div class="controls">
+    <input class="search" type="search" id="cq" placeholder="Buscar código, cliente o descripción…" value="${esc(codeFilter.q)}">
+    <select id="ccli"><option value="">Todos los clientes</option>${clientes.map(c => `<option ${c === codeFilter.cli ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+    <select id="cest"><option value="">Todos</option><option value="completo" ${codeFilter.estado === 'completo' ? 'selected' : ''}>Tiempos completos</option><option value="falta" ${codeFilter.estado === 'falta' ? 'selected' : ''}>Faltan (sin estudio o incompletos)</option></select>
+    <button class="btn go right admin-only" id="addCodeBtn">+ Código</button>
+  </div>
+  <div class="tablebox"><table>
+    <thead><tr><th>Código</th><th>Cliente</th><th>Descripción</th><th>Línea</th><th class="num">Costura (min)</th><th>Estado</th><th class="num">Act.</th><th></th></tr></thead>
+    <tbody id="cod-tbody"></tbody>
+  </table></div>
+  <div class="count" id="cod-count"></div>`
+  fillCodigos()
+  document.getElementById('cq').addEventListener('input', e => { codeFilter.q = e.target.value; fillCodigos() })
+  document.getElementById('ccli').addEventListener('change', e => { codeFilter.cli = e.target.value; fillCodigos() })
+  document.getElementById('cest').addEventListener('change', e => { codeFilter.estado = e.target.value; fillCodigos() })
+  document.getElementById('addCodeBtn').addEventListener('click', () => editCodigo(null))
 }
-
-function filaCodigo(c) {
-  const agg = state.minPorCodigo[c.codigo]
-  const tiene = !!agg
-  return `
-    <tr>
-      <td><span class="linkish" data-codigo="${esc(c.codigo)}">${esc(c.codigo)}</span></td>
-      <td>${esc(c.cliente || '—')}</td>
-      <td class="hide-mobile">${esc(c.descripcion || '—')}</td>
-      <td class="num">${tiene ? fmt(agg.costura) : '—'}</td>
-      <td class="num hide-mobile">${tiene ? fmt(agg.total) : '—'}</td>
-      <td>${tiene ? '<span class="pill pill-ok">Con tiempos</span>' : '<span class="pill pill-no">Sin tiempos</span>'}</td>
+function fillCodigos() {
+  const tb = document.getElementById('cod-tbody'); if (!tb) return
+  let rows = codigos()
+  if (codeFilter.cli) rows = rows.filter(c => c.cliente === codeFilter.cli)
+  if (codeFilter.estado === 'completo') rows = rows.filter(c => statusCode(c.codigo) === 'completo')
+  if (codeFilter.estado === 'falta') rows = rows.filter(c => statusCode(c.codigo) !== 'completo')
+  if (codeFilter.q) { const q = codeFilter.q.toLowerCase(); rows = rows.filter(c => (c.codigo + ' ' + c.cliente + ' ' + (c.descripcion || '')).toLowerCase().includes(q)) }
+  tb.innerHTML = rows.map(c => {
+    const ht = hasTiempos(c.codigo); return `<tr>
+      <td class="codecell"><span class="linkish" data-go="${esc(c.codigo)}">${esc(c.codigo)}</span></td>
+      <td>${esc(c.cliente)}</td><td class="muted">${esc(c.descripcion)}</td><td>${esc(c.linea)}</td>
+      <td class="num">${ht ? fmt(costuraTotal(c.codigo)) : '—'}</td>
+      <td>${estadoPill(c.codigo)}</td>
+      <td class="num muted" style="font-size:11.5px;white-space:nowrap">${ultAct(c.codigo) || '—'}</td>
+      <td class="nowrap"><button class="btn sm" data-go="${esc(c.codigo)}">Tiempos</button> <button class="btn sm ghost admin-only" data-act="editCodigo" data-arg="${esc(c.codigo)}">Editar</button></td>
     </tr>`
+  }).join('') || `<tr><td colspan="8" class="empty">Sin resultados</td></tr>`
+  const cc = document.getElementById('cod-count'); if (cc) cc.textContent = `${rows.length} de ${codigos().length} códigos`
+}
+function editCodigo(code) {
+  const c = code ? codigoByCode(code) : { codigo: '', cliente: '', descripcion: '', linea: '' }
+  const isNew = !code
+  openModal(`<h3>${isNew ? 'Nuevo código' : 'Editar código'}</h3>
+    <div class="field"><label>Código Dynamics</label><input id="f-cod" ${isNew ? '' : 'disabled'} value="${esc(c.codigo)}" placeholder="SS220T094094110XXX01"></div>
+    <div class="field"><label>Cliente</label><input id="f-cli" value="${esc(c.cliente)}"></div>
+    <div class="field"><label>Descripción</label><input id="f-desc" value="${esc(c.descripcion)}"></div>
+    <div class="field"><label>Línea</label><select id="f-lin">${['', 'CIR', '4P', 'UP', 'PS', 'CRRO', 'CONT', 'OT', 'VAL'].map(l => `<option ${l === c.linea ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="f-save">Guardar</button></div>`)
+  document.getElementById('f-save').addEventListener('click', async () => {
+    const codigo = (document.getElementById('f-cod').value || '').trim().toUpperCase().replace(/\s+/g, '')
+    if (!codigo) { toast('Escribe el código.'); return }
+    if (!/^[A-Z0-9._~:@+-]+$/.test(codigo)) { toast('El código tiene caracteres no válidos.'); return }
+    if (isNew && codigoByCode(codigo)) { toast('Ese código ya existe.'); return }
+    const obj = { codigo, cliente: document.getElementById('f-cli').value.trim(), descripcion: document.getElementById('f-desc').value.trim(), linea: document.getElementById('f-lin').value }
+    if (await saveCodigo(obj)) { closeModal(); toast('Código guardado.') }
+  })
 }
 
-// ---------- Vista: detalle de un código ----------
-async function abrirCodigo(codigo) {
-  state.codigoAbierto = codigo
-  const c = state.codigos.find((x) => x.codigo === codigo)
-  app.innerHTML = `${topbar()}<div class="container"><div class="loading">Cargando operaciones…</div></div>`
-  wireTopbar()
-
-  const { data: filas } = await supabase
-    .from('tiempos')
-    .select('operacion, min, obs, val, supl, muestras, orden')
-    .eq('codigo', codigo)
-    .order('orden')
-
-  const rows = filas || []
-  const total = rows.reduce((s, r) => s + (typeof r.min === 'number' ? r.min : 0), 0)
-  const costura = rows.reduce((s, r) => s + (state.tiposOp[r.operacion] === 'Costura' && typeof r.min === 'number' ? r.min : 0), 0)
-
-  app.innerHTML = `
-    ${topbar()}
-    <div class="container">
-      <button class="back" id="back">← Volver a códigos</button>
-      <div class="detail-head">
-        <h2>${esc(c?.codigo || codigo)}</h2>
-        <div class="meta">${esc(c?.cliente || '')}${c?.descripcion ? ' · ' + esc(c.descripcion) : ''}</div>
-        <div class="chips">
-          <div class="chip"><b>${esc(c?.linea || '—')}</b><span>Línea</span></div>
-          <div class="chip"><b>${rows.length}</b><span>Operaciones</span></div>
-          <div class="chip"><b>${fmt(costura)}</b><span>Costura (min)</span></div>
-          <div class="chip"><b>${fmt(total)}</b><span>Total (min)</span></div>
-        </div>
+/* ---------- EDITOR de tiempos por código (dentro de Códigos) ---------- */
+function goCode(code) { curCode = code; setTab('codigos') }
+function backToCodes() { curCode = null; renderCodigos() }
+function renderEditor(el) {
+  const c = codeInfo(curCode)
+  const rows = tiemposOf(curCode); const ht = rows.length > 0
+  el.innerHTML = `
+  <div class="controls" style="justify-content:space-between"><button class="btn ghost sm" data-act="backToCodes">← Todos los códigos</button><button class="btn go sm" data-act="imgCostura" title="Generar imagen de las operaciones de costura para compartir">📷 Imagen de costura</button></div>
+  <div class="section">
+    <div class="editor-head">
+      <div class="meta"><div class="code">${esc(c.codigo)}</div><div class="desc">${esc(c.cliente)} · ${esc(c.descripcion || '')} · Línea ${esc(c.linea || '—')}${ultAct(curCode) ? ` · <b>Act. ${ultAct(curCode)}</b>` : ''}</div></div>
+      <div class="tot"><div class="v mono">${fmt(costuraTotal(curCode))}</div><div class="l">min costura · ${nOpsCostura(curCode)} op</div></div>
+    </div>
+    ${!ht ? `<div class="banner">Este código no tiene tiempos. Puedes ingresarlos desde cero abajo, u <b>homologar</b> los de otro código con el mismo saco.</div>
+      <div class="controls admin-only"><button class="btn go" data-act="openHomologar">Homologar de otro código</button></div>` : ''}
+    <div class="tablebox"><table>
+      <thead><tr><th style="width:44px">#</th><th>Operación</th><th>Tipo</th><th class="num">Tiempo (min)</th><th class="num">Und/hora</th><th></th></tr></thead>
+      <tbody>${rows.map((r, i) => {
+    const t = tipoOf(r.op); return `<tr>
+        <td class="num muted">${i + 1}</td><td>${esc(r.op)}</td>
+        <td>${t === 'Costura' ? '<span class="pill cos">Costura</span>' : (t === 'Manual' ? '<span class="pill man">Manual</span>' : '<span class="pill no">?</span>')}</td>
+        <td class="num"><input type="number" step="0.01" min="0" value="${r.min == null ? '' : r.min}" data-i="${i}" class="tmin" ${ROLE !== 'admin' ? 'disabled' : ''}></td>
+        <td class="num">${uph(r.min) != null ? fmt(uph(r.min), 1) : '—'}</td>
+        <td class="nowrap"><button class="btn sm go admin-only" data-act="openCrono" data-arg="${i}" title="Tomar tiempo con cronómetro">⏱ Tomar</button> ${r.muestras && r.muestras.length ? `<button class="btn sm ghost" data-act="verRegistro" data-arg="${i}" title="Ver muestras tomadas">👁 ${r.muestras.length}</button> ` : ''}<button class="btn sm danger admin-only" data-act="delRow" data-arg="${i}">Quitar</button></td>
+      </tr>`
+  }).join('')}
+      ${rows.length ? '' : `<tr><td colspan="6" class="empty">Sin operaciones todavía.</td></tr>`}</tbody>
+    </table></div>
+    <div class="addrow admin-only">
+      <div class="combo" id="opcombo">
+        <input type="text" id="newop" autocomplete="off" placeholder="Escribe la operación (costura primero)…">
+        <div class="combo-menu" id="opmenu" hidden></div>
       </div>
-      <div class="tablebox">
-        <table>
-          <thead>
-            <tr>
-              <th class="num">#</th>
-              <th>Operación</th>
-              <th>Tipo</th>
-              <th class="num">Tiempo (min)</th>
-              <th class="num hide-mobile">Und/hora</th>
-              <th class="num hide-mobile">Muestras</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows.map(filaOperacion).join('') || `<tr><td colspan="6"><div class="empty">Este código no tiene operaciones registradas.</div></td></tr>`}
-          </tbody>
-        </table>
-      </div>
-    </div>`
+      <input type="number" id="newmin" step="0.01" min="0" placeholder="min">
+      <button class="btn go" data-act="addRow">Agregar</button>
+      <button class="btn right" data-act="openHomologar">Homologar de otro código</button>
+    </div>
+    <div class="count">Los tiempos se guardan en la nube al salir de cada celda. El total y el análisis usan solo las operaciones de costura.</div>
+  </div>`
+  el.querySelectorAll('input.tmin').forEach(inp => inp.addEventListener('change', async e => {
+    const i = +e.target.dataset.i; const v = e.target.value === '' ? null : parseFloat(e.target.value)
+    const nr = tiemposOf(curCode).map((r, idx) => idx === i ? { op: r.op, min: v } : { ...r })
+    if (await saveTiempos(curCode, nr)) toast('Tiempo guardado.')
+  }))
+  setupCombo()
+}
+const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+function filterOps(q) {
+  const n = norm(q); const ops = opList(); const m = o => !n || norm(o.nombre).includes(n)
+  return { cos: ops.filter(o => o.tipo === 'Costura' && m(o)), man: ops.filter(o => o.tipo === 'Manual' && m(o)) }
+}
+function renderMenu(q) {
+  const m = document.getElementById('opmenu'); if (!m) return; const { cos, man } = filterOps(q)
+  let h = ''; if (cos.length) h += '<div class="gh">Costura</div>' + cos.map(o => `<div class="it cos" data-op="${esc(o.nombre)}">${esc(o.nombre)}<span class="tag">Costura</span></div>`).join('')
+  if (man.length) h += '<div class="gh">Manual</div>' + man.map(o => `<div class="it" data-op="${esc(o.nombre)}">${esc(o.nombre)}<span class="tag">Manual</span></div>`).join('')
+  if (!cos.length && !man.length) h = '<div class="gh">Sin coincidencias</div>'
+  m.innerHTML = h; m.hidden = false
+  m.querySelectorAll('.it').forEach(it => it.addEventListener('mousedown', e => { e.preventDefault(); document.getElementById('newop').value = it.dataset.op; m.hidden = true; document.getElementById('newmin').focus() }))
+}
+function setupCombo() {
+  const inp = document.getElementById('newop'); if (!inp) return
+  inp.addEventListener('focus', () => renderMenu(inp.value)); inp.addEventListener('input', () => renderMenu(inp.value))
+  inp.addEventListener('blur', () => setTimeout(() => { const m = document.getElementById('opmenu'); if (m) m.hidden = true }, 150))
+}
+async function addRow() {
+  const typed = (document.getElementById('newop').value || '').trim(); const minv = document.getElementById('newmin').value
+  if (!typed) { toast('Escribe la operación.'); return }
+  const ops = opList(); let op = ops.find(o => o.nombre.toLowerCase() === typed.toLowerCase())
+  if (!op) { const { cos, man } = filterOps(typed); op = cos[0] || man[0] }
+  if (!op) { toast('No encontré esa operación. Si es nueva, créala en la pestaña Operaciones.'); return }
+  const nr = [...tiemposOf(curCode), { op: op.nombre, min: minv === '' ? null : parseFloat(minv) }]
+  if (await saveTiempos(curCode, nr)) { toast('Operación agregada: ' + op.nombre + '.') }
+}
+function delRow(i) {
+  i = +i
+  const r = tiemposOf(curCode)[i]; if (!r) return
+  const tiene = (r.muestras && r.muestras.length) || typeof r.min === 'number'
+  openModal(`<h3>Quitar operación</h3>
+    <div class="hint" style="color:var(--muted);font-size:13px;margin:4px 0 2px">¿Seguro que quieres quitar <b>${esc(r.op)}</b> de <b>${esc(curCode)}</b>?${tiene ? ' Se pierde su tiempo' + ((r.muestras && r.muestras.length) ? ' y sus ' + r.muestras.length + ' muestras' : '') + '.' : ''}</div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn danger" data-act="doDelRow" data-arg="${i}">Sí, quitar</button></div>`)
+}
+async function doDelRow(i) {
+  i = +i
+  const nr = tiemposOf(curCode).filter((_, idx) => idx !== i)
+  if (await saveTiempos(curCode, nr)) { closeModal(); toast('Operación quitada.') }
+}
+function verRegistro(i) {
+  i = +i
+  const r = tiemposOf(curCode)[i]; if (!r || !r.muestras || !r.muestras.length) { toast('Esta operación no tiene registro de muestras.'); return }
+  const rows = r.muestras.map((s, k) => `<tr><td>M${k + 1}</td><td class="num">${swFmt(s * 1000)}</td><td class="num">${fmt(s / 60)}</td></tr>`).join('')
+  openModal(`<h3>Registro de la toma</h3>
+    <div class="hint" style="color:var(--muted);font-size:12.5px;margin-bottom:10px"><b>${esc(r.op)}</b> · ${esc(curCode)}${r.ts ? ` · ${fmtDateShort(r.ts)}` : ''}</div>
+    <div class="tablebox" style="margin-bottom:12px"><table style="min-width:0"><thead><tr><th>Muestra</th><th class="num">mm:ss</th><th class="num">min</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="sw-calc">
+      <div class="row"><label>Muestras tomadas</label><span class="mono">${r.muestras.length}</span></div>
+      <div class="row"><label>Promedio observado (TO)</label><span class="mono">${fmt(r.obs)} min</span></div>
+      <div class="row"><label>Valoración del ritmo</label><span class="mono">${r.val != null ? r.val + '%' : '—'}</span></div>
+      <div class="row"><label>Suplementos</label><span class="mono">${r.supl != null ? r.supl + '%' : '—'}</span></div>
+      <div class="row"><label>Producción por hora</label><span class="mono">${uph(r.min) != null ? fmt(uph(r.min), 1) + ' und/hora' : '—'}</span></div>
+      <div class="sw-te"><span style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Tiempo estándar</span><span class="v">${fmt(r.min)} min</span></div>
+    </div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cerrar</button>${ROLE === 'admin' ? `<button class="btn go" data-act="verRegToCrono" data-arg="${i}">Volver a tomar</button>` : ''}</div>`)
+}
+function verRegToCrono(i) { closeModal(); openCrono(i) }
 
-  wireTopbar()
-  document.getElementById('back').addEventListener('click', renderCodigos)
+/* ---------- cronómetro ---------- */
+function swFmt(ms) { const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000), d = Math.floor((ms % 1000) / 100); return m + ':' + String(s).padStart(2, '0') + '.' + d }
+function swElapsed() { return swAcc + (swRunning ? (performance.now() - swBase) : 0) }
+function openCrono(i) {
+  i = +i
+  const row = tiemposOf(curCode)[i]; if (!row) return
+  swRowIndex = i; swOp = row.op; swSamples = []; swAcc = 0; swRunning = false; swMax = 5
+  swHadPrev = !!(row.muestras && row.muestras.length); swConfirmed = false
+  const defSupl = (typeof row.supl === 'number') ? row.supl : 19
+  const defVal = (typeof row.val === 'number') ? row.val : 100
+  openModal(`<h3>Cronómetro</h3>
+    <div class="hint" style="color:var(--muted);font-size:12.5px;margin-bottom:6px"><b>${esc(swOp)}</b> · ${esc(curCode)}</div>
+    <div class="sw-cfg">Muestras a tomar: <input type="number" id="sw-max" min="1" max="20" value="5"> <span>· toca Vuelta al terminar cada ciclo</span></div>
+    <div class="sw-time" id="sw-time">0:00.0</div>
+    <div class="sw-ctrls">
+      <button class="btn go" id="sw-run" data-act="swRun">Iniciar</button>
+      <button class="btn lap" id="sw-lap" data-act="swLap">Vuelta</button>
+      <button class="btn ghost" data-act="swReset">Reiniciar</button>
+    </div>
+    <div class="sw-samples" id="sw-samples"></div>
+    <div class="sw-calc">
+      <div class="row"><label>Promedio observado (TO)</label><span class="mono" id="sw-to">—</span></div>
+      <div class="row"><label>Valoración del ritmo (%)</label><input type="number" id="sw-val" value="${defVal}" min="1" step="1"></div>
+      <div class="row"><label>Suplementos (%)</label><input type="number" id="sw-supl" value="${defSupl}" min="0" step="1"></div>
+      <div style="font-size:11px;color:var(--muted);margin:-4px 0 8px">Base costura 19% (9% OIT + 10% del puesto). Súbelo si la operación es más pesada.</div>
+      <div class="sw-te"><span style="font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Tiempo estándar</span><span class="v" id="sw-te">—</span></div>
+      <div style="text-align:right;font-size:12.5px;color:var(--muted);margin-top:4px" id="sw-uph"></div>
+    </div>
+    <div class="banner" id="sw-confirm" hidden style="margin-top:10px"></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="sw-save" data-act="swSave">Guardar tiempo</button></div>`, true)
+  document.getElementById('sw-max').addEventListener('change', e => { swMax = Math.max(1, Math.min(20, +e.target.value || 5)) })
+  ;['sw-val', 'sw-supl'].forEach(id => document.getElementById(id).addEventListener('input', swCalc))
+  swRenderSamples(); swCalc()
+}
+function swRun() {
+  if (swRunning) { swAcc = swElapsed(); swRunning = false; clearInterval(swTimer); document.getElementById('sw-run').textContent = 'Continuar'; document.getElementById('sw-time').classList.remove('run') }
+  else {
+    swBase = performance.now(); swRunning = true; document.getElementById('sw-run').textContent = 'Pausar'; document.getElementById('sw-time').classList.add('run')
+    clearInterval(swTimer); swTimer = setInterval(() => { const t = document.getElementById('sw-time'); if (t) t.textContent = swFmt(swElapsed()) }, 100)
+  }
+}
+function swLap() {
+  const e = swElapsed(); if (e < 300) return
+  swSamples.push(e / 1000) // segundos
+  swAcc = 0; swBase = performance.now() // snapback: reinicia el ciclo
+  swRenderSamples(); swCalc()
+  const t = document.getElementById('sw-time'); if (t) t.textContent = swFmt(swElapsed())
+  if (swSamples.length >= swMax) { swRunning = false; clearInterval(swTimer); const r = document.getElementById('sw-run'); if (r) { r.textContent = 'Iniciar' } const tt = document.getElementById('sw-time'); if (tt) tt.classList.remove('run'); toast('Listas las ' + swMax + ' muestras.') }
+}
+function swReset() { clearInterval(swTimer); swRunning = false; swAcc = 0; swSamples = []; const t = document.getElementById('sw-time'); if (t) { t.textContent = '0:00.0'; t.classList.remove('run') } const r = document.getElementById('sw-run'); if (r) r.textContent = 'Iniciar'; swRenderSamples(); swCalc() }
+function swRenderSamples() {
+  const box = document.getElementById('sw-samples'); if (!box) return
+  box.innerHTML = swSamples.length ? swSamples.map((s, i) => `<span class="sw-chip">M${i + 1} <b>${swFmt(s * 1000)}</b></span>`).join('') : '<span class="muted" style="font-size:12.5px">Sin muestras aún</span>'
+}
+function swTOmin() { if (!swSamples.length) return null; const avgSec = swSamples.reduce((a, b) => a + b, 0) / swSamples.length; return avgSec / 60 }
+function swCalc() {
+  const to = swTOmin(); const toEl = document.getElementById('sw-to'), teEl = document.getElementById('sw-te')
+  if (!toEl) return
+  if (to == null) { toEl.textContent = '—'; teEl.textContent = '—'; return }
+  const val = parseFloat(document.getElementById('sw-val').value) || 0
+  const supl = parseFloat(document.getElementById('sw-supl').value) || 0
+  const te = to * (val / 100) * (1 + supl / 100)
+  toEl.textContent = fmt(to) + ' min'; teEl.textContent = fmt(te) + ' min'
+  const u = document.getElementById('sw-uph'); if (u) u.textContent = te > 0 ? ('≈ ' + fmt(60 / te, 1) + ' und/hora') : ''
+}
+function swSaveConfirm() { swConfirmed = true; swSave() }
+function swHideConfirm() { document.getElementById('sw-confirm').hidden = true }
+async function swSave() {
+  const to = swTOmin(); if (to == null) { toast('Toma al menos una muestra.'); return }
+  const prev = tiemposOf(curCode)[swRowIndex]
+  if (swHadPrev && !swConfirmed && prev && prev.muestras && prev.muestras.length) {
+    const c = document.getElementById('sw-confirm')
+    c.innerHTML = `⚠ Vas a reemplazar la toma anterior de <b>${esc(swOp)}</b> (${prev.muestras.length} muestras · ${fmt(prev.min)} min). La anterior se pierde.
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm ghost" data-act="swHideConfirm">Seguir tomando</button><button class="btn sm danger" data-act="swSaveConfirm">Sí, reemplazar</button></div>`
+    c.hidden = false; c.scrollIntoView({ block: 'nearest' }); return
+  }
+  const val = parseFloat(document.getElementById('sw-val').value) || 100
+  const supl = parseFloat(document.getElementById('sw-supl').value) || 0
+  const te = +(to * (val / 100) * (1 + supl / 100)).toFixed(3)
+  const rows = tiemposOf(curCode).map((r, idx) => idx === swRowIndex
+    ? { op: r.op, min: te, obs: +to.toFixed(3), val, supl, muestras: swSamples.map(s => +s.toFixed(2)), ts: new Date().toISOString() }
+    : { ...r })
+  if (await saveTiempos(curCode, rows)) { closeModal(); toast('Tiempo estándar guardado: ' + fmt(te) + ' min.') }
 }
 
-function filaOperacion(r, i) {
-  const tipo = state.tiposOp[r.operacion] || 'Manual'
-  const undHora = (typeof r.min === 'number' && r.min > 0) ? Math.round(60 / r.min) : null
-  const nMuestras = Array.isArray(r.muestras) ? r.muestras.length : 0
-  return `
-    <tr>
-      <td class="num">${i + 1}</td>
-      <td>${esc(r.operacion)}</td>
-      <td class="${tipo === 'Costura' ? 'tipo-costura' : 'tipo-manual'}">${esc(tipo)}</td>
-      <td class="num">${fmt(r.min, 3)}</td>
-      <td class="num hide-mobile">${undHora ?? '—'}</td>
-      <td class="num hide-mobile">${nMuestras || '—'}</td>
-    </tr>`
+/* ---------- homologar ---------- */
+function openHomologar() {
+  openModal(`<h3>Homologar tiempos a ${esc(curCode)}</h3>
+    <div class="htabs"><button class="htab active" id="ht-full">Saco completo</button><button class="htab" id="ht-one">Operación individual</button></div>
+    <div id="hbody"></div>`, true)
+  document.getElementById('ht-full').addEventListener('click', e => { setHtab(e.target); hFull() })
+  document.getElementById('ht-one').addEventListener('click', e => { setHtab(e.target); hOne() })
+  hFull()
 }
+function setHtab(btn) { document.querySelectorAll('.htab').forEach(x => x.classList.toggle('active', x === btn)) }
+function hFull() {
+  const src = codigos().filter(c => c.codigo !== curCode && hasTiempos(c.codigo))
+  document.getElementById('hbody').innerHTML = `
+    <div class="hint" style="color:var(--muted);font-size:12.5px">Copia TODAS las operaciones de otro código a <b>${esc(curCode)}</b>. Queda una copia independiente.</div>
+    <input class="search" style="width:100%;margin-top:10px" type="search" id="h-q" placeholder="Buscar código o cliente…">
+    <div class="hlist" id="h-res"></div>`
+  const draw = q => {
+    const r = src.filter(c => !q || (c.codigo + ' ' + c.cliente).toLowerCase().includes(q.toLowerCase())).slice(0, 150)
+    document.getElementById('h-res').innerHTML = `<table><tbody>
+      ${r.length ? r.map(c => `<tr><td class="codecell">${esc(c.codigo)}</td><td class="muted" style="font-size:12px">${esc(c.cliente)}</td><td class="num">${fmt(costuraTotal(c.codigo))}</td><td><button class="btn sm go" data-act="doHomologarFull" data-arg="${esc(c.codigo)}">Copiar</button></td></tr>`).join('') : `<tr><td class="empty">Sin resultados</td></tr>`}
+    </tbody></table>`
+  }
+  draw(''); document.getElementById('h-q').addEventListener('input', e => draw(e.target.value))
+}
+async function doHomologarFull(srcCode) {
+  const nr = tiemposOf(srcCode).map(r => ({ op: r.op, min: r.min }))
+  if (await saveTiempos(curCode, nr)) { closeModal(); toast('Saco completo homologado de ' + srcCode + '.') }
+}
+function hOne() {
+  const withT = codigos().filter(c => c.codigo !== curCode && hasTiempos(c.codigo))
+  const clientes = [...new Set(withT.map(c => c.cliente))].sort()
+  document.getElementById('hbody').innerHTML = `
+    <div class="hint" style="color:var(--muted);font-size:12.5px">Copia UNA operación de otro código. Elige cliente, código y operación. Puedes agregar varias seguidas.</div>
+    <div class="field" style="margin-top:10px"><label>Cliente</label><select id="ho-cli"><option value="">Elige cliente…</option>${clientes.map(c => `<option>${esc(c)}</option>`).join('')}</select></div>
+    <div class="field"><label>Código (con tiempos)</label><select id="ho-cod" disabled><option value="">Elige código…</option></select></div>
+    <div class="hlist" id="ho-ops"><div class="empty">Elige un cliente y un código.</div></div>`
+  const cli = document.getElementById('ho-cli'), cod = document.getElementById('ho-cod'), box = document.getElementById('ho-ops')
+  cli.addEventListener('change', () => {
+    const list = withT.filter(c => c.cliente === cli.value)
+    cod.innerHTML = `<option value="">Elige código…</option>` + list.map(c => `<option>${esc(c.codigo)}</option>`).join(''); cod.disabled = !cli.value
+    box.innerHTML = `<div class="empty">Elige un código.</div>`
+  })
+  cod.addEventListener('change', () => {
+    if (!cod.value) { box.innerHTML = `<div class="empty">Elige un código.</div>`; return } const rows = tiemposOf(cod.value)
+    box.innerHTML = `<table><thead><tr><th>Operación</th><th>Tipo</th><th class="num">Min</th><th></th></tr></thead><tbody>
+      ${rows.map((r, i) => { const t = tipoOf(r.op); return `<tr><td>${esc(r.op)}</td><td>${t === 'Costura' ? '<span class="pill cos">Costura</span>' : '<span class="pill man">Manual</span>'}</td><td class="num">${fmt(r.min)}</td><td><button class="btn sm go" data-act="addOneOp" data-arg="${esc(cod.value)}" data-arg2="${i}">Agregar</button></td></tr>` }).join('')}
+    </tbody></table>`
+  })
+}
+async function addOneOp(srcCode, i) {
+  const r = tiemposOf(srcCode)[+i]; if (!r) return
+  const nr = [...tiemposOf(curCode), { op: r.op, min: r.min }]
+  if (await saveTiempos(curCode, nr)) { toast('Agregada: ' + r.op + '.') }
+}
+
+/* ---------- OPERACIONES ---------- */
+function renderOperaciones() {
+  const el = document.getElementById('p-operaciones')
+  if (!dbReady) { el.innerHTML = loadingHtml; return }
+  const ops = opList(); const fams = [...new Set(ops.map(o => o.familia))]
+  el.innerHTML = `
+  <div class="controls">
+    <input class="search" type="search" id="oq" placeholder="Buscar operación…" value="${esc(opFilter.q)}">
+    <select id="ofam"><option value="">Todas las familias</option>${fams.map(f => `<option ${f === opFilter.fam ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select>
+    <select id="otipo"><option value="">Costura y manual</option><option ${opFilter.tipo === 'Costura' ? 'selected' : ''}>Costura</option><option ${opFilter.tipo === 'Manual' ? 'selected' : ''}>Manual</option></select>
+    <button class="btn go right admin-only" id="addOpBtn">+ Operación</button>
+  </div>
+  <div class="tablebox"><table>
+    <thead><tr><th style="width:44px">#</th><th>Familia</th><th>Operación</th><th>Tipo</th><th></th></tr></thead>
+    <tbody id="op-tbody"></tbody>
+  </table></div>
+  <div class="count" id="op-count"></div>`
+  fillOps()
+  document.getElementById('oq').addEventListener('input', e => { opFilter.q = e.target.value; fillOps() })
+  document.getElementById('ofam').addEventListener('change', e => { opFilter.fam = e.target.value; fillOps() })
+  document.getElementById('otipo').addEventListener('change', e => { opFilter.tipo = e.target.value; fillOps() })
+  document.getElementById('addOpBtn').addEventListener('click', () => editOp(null))
+}
+// Orden de familias como en el artefacto original.
+const FAMILIAS = ['Corte', 'Perforación', 'Preparación', 'Pegue', 'Cierre y amarre', 'Unión / costura', 'Doblado', 'Marcado', 'Estampado', 'Etiqueta y liner', 'Revisión y prensa', 'Acabado', 'Traslado y montaje', 'Otras']
+function famRank(f) { const i = FAMILIAS.indexOf(f); return i < 0 ? FAMILIAS.length : i }
+function fillOps() {
+  const tb = document.getElementById('op-tbody'); if (!tb) return
+  const ops = opList(); let rows = ops.slice().sort((a, b) => famRank(a.familia) - famRank(b.familia) || a.nombre.localeCompare(b.nombre))
+  if (opFilter.fam) rows = rows.filter(o => o.familia === opFilter.fam)
+  if (opFilter.tipo) rows = rows.filter(o => o.tipo === opFilter.tipo)
+  if (opFilter.q) { const q = opFilter.q.toLowerCase(); rows = rows.filter(o => o.nombre.toLowerCase().includes(q)) }
+  tb.innerHTML = rows.map((o, i) => `<tr><td class="num muted">${i + 1}</td><td>${esc(o.familia)}</td><td>${esc(o.nombre)}</td>
+      <td>${o.tipo === 'Costura' ? '<span class="pill cos">Costura</span>' : '<span class="pill man">Manual</span>'}</td>
+      <td><button class="btn sm ghost admin-only" data-act="editOp" data-arg="${esc(o.nombre)}">Editar</button></td></tr>`).join('') || `<tr><td colspan="5" class="empty">Sin resultados</td></tr>`
+  const cc = document.getElementById('op-count'); if (cc) cc.textContent = `${rows.length} de ${ops.length} operaciones · ${ops.filter(o => o.tipo === 'Costura').length} costura · ${ops.filter(o => o.tipo === 'Manual').length} manual`
+}
+function editOp(nombre) {
+  const ops = opList(); const o = nombre ? ops.find(x => x.nombre === nombre) : { nombre: '', familia: 'Otras', tipo: 'Manual' }
+  openModal(`<h3>${nombre ? 'Editar operación' : 'Nueva operación'}</h3>
+    <div class="field"><label>Nombre</label><input id="o-nom" ${nombre ? 'disabled' : ''} value="${esc(o.nombre)}"></div>
+    <div class="field"><label>Familia</label><select id="o-fam">${FAMILIAS.map(f => `<option ${f === o.familia ? 'selected' : ''}>${esc(f)}</option>`).join('')}</select></div>
+    <div class="field"><label>Tipo</label><select id="o-tipo"><option ${o.tipo === 'Costura' ? 'selected' : ''}>Costura</option><option ${o.tipo === 'Manual' ? 'selected' : ''}>Manual</option></select></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="o-save">Guardar</button></div>`)
+  document.getElementById('o-save').addEventListener('click', async () => {
+    const nom = (document.getElementById('o-nom').value || '').trim()
+    if (!nom) { toast('Escribe el nombre.'); return }
+    const rec = { nombre: nom, familia: document.getElementById('o-fam').value, tipo: document.getElementById('o-tipo').value }
+    if (await saveOperacion(rec)) { closeModal(); toast('Operación guardada.') }
+  })
+}
+
+/* ---------- imagen de costura (para compartir) ---------- */
+let _imgBlob = null, _imgName = ''
+function _fitText(g, txt, maxW) { txt = String(txt || ''); if (g.measureText(txt).width <= maxW) return txt; let t = txt; while (t.length > 1 && g.measureText(t + '…').width > maxW) t = t.slice(0, -1); return t + '…' }
+async function imgCostura() {
+  if (!curCode) { toast('Abre un código primero.'); return }
+  const c = codeInfo(curCode)
+  const rows = tiemposOf(curCode).filter(r => tipoOf(r.op) === 'Costura')
+  if (!rows.length) { toast('Este código no tiene operaciones de costura.'); return }
+  try { if (document.fonts && document.fonts.ready) await document.fonts.ready } catch (e) {}
+  const W = 1080, pad = 52, headH = 236, titleH = 70, rowH = 102, footH = 118, S = 2
+  const H = headH + titleH + rows.length * rowH + footH
+  const cv = document.createElement('canvas'); cv.width = W * S; cv.height = H * S
+  const g = cv.getContext('2d'); g.scale(S, S)
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left'
+  // fondo
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H)
+  // cabecera verde
+  g.fillStyle = '#1B4332'; g.fillRect(0, 0, W, headH)
+  g.fillStyle = '#A8B826'; g.fillRect(0, headH - 8, W, 8)
+  g.fillStyle = '#A8B826'; g.font = '700 25px Archivo, sans-serif'
+  g.fillText('POLIPLASTICS · PLANTA SUPER SACOS', pad, 56)
+  g.fillStyle = '#ffffff'; g.font = '800 58px Archivo, sans-serif'
+  g.fillText(_fitText(g, c.codigo, W - pad * 2), pad, 126)
+  g.fillStyle = 'rgba(255,255,255,.85)'; g.font = "400 25px 'IBM Plex Sans', sans-serif"
+  const d1 = [c.cliente, ('Línea ' + (c.linea || '—'))].filter(Boolean).join('   ·   ')
+  g.fillText(_fitText(g, d1, W - pad * 2), pad, 168)
+  if (c.descripcion) { g.font = "400 22px 'IBM Plex Sans', sans-serif"; g.fillStyle = 'rgba(255,255,255,.7)'; g.fillText(_fitText(g, c.descripcion, W - pad * 2), pad, 202) }
+  // franja título
+  let y = headH
+  g.fillStyle = '#f3f5ef'; g.fillRect(0, y, W, titleH)
+  g.fillStyle = '#1B4332'; g.font = '700 23px Archivo, sans-serif'
+  g.fillText('OPERACIONES DE COSTURA', pad, y + 44)
+  g.textAlign = 'right'; g.font = '700 20px Archivo, sans-serif'; g.fillStyle = '#52636b'
+  g.fillText('UND / HORA', W - pad, y + 44); g.textAlign = 'left'
+  y += titleH
+  // filas
+  rows.forEach((r, i) => {
+    if (i % 2 === 1) { g.fillStyle = '#f7f8f4'; g.fillRect(0, y, W, rowH) }
+    const cy = y + rowH / 2
+    // badge número
+    g.fillStyle = '#1B4332'; g.beginPath(); g.arc(pad + 24, cy, 24, 0, Math.PI * 2); g.fill()
+    g.fillStyle = '#ffffff'; g.font = '700 26px Archivo, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'
+    g.fillText(String(i + 1), pad + 24, cy + 1)
+    g.textAlign = 'left'; g.textBaseline = 'alphabetic'
+    // nombre operación
+    const nameX = pad + 68, rightW = 210, nameMax = W - pad - rightW - nameX
+    g.fillStyle = '#17201c'; g.font = "600 29px 'IBM Plex Sans', sans-serif"
+    g.fillText(_fitText(g, r.op, nameMax), nameX, cy + 9)
+    // und/hora grande + min pequeño a la derecha
+    const u = uph(r.min)
+    g.textAlign = 'right'
+    if (u != null) {
+      g.fillStyle = '#1B4332'; g.font = '800 40px Archivo, sans-serif'
+      g.fillText(fmt(u, 1), W - pad, cy + 2)
+      g.fillStyle = '#7a8a92'; g.font = "400 20px 'IBM Plex Mono', monospace"
+      g.fillText(fmt(r.min, 2) + ' min', W - pad, cy + 30)
+    } else {
+      g.fillStyle = '#E9A820'; g.font = '700 24px Archivo, sans-serif'
+      g.fillText('Pendiente', W - pad, cy + 8)
+    }
+    g.textAlign = 'left'
+    g.strokeStyle = '#e7eae4'; g.lineWidth = 1; g.beginPath(); g.moveTo(0, y + rowH); g.lineTo(W, y + rowH); g.stroke()
+    y += rowH
+  })
+  // pie
+  const conT = rows.filter(r => uph(r.min) != null).length
+  g.fillStyle = '#1B4332'; g.fillRect(0, y, W, footH)
+  g.fillStyle = '#ffffff'; g.font = '700 24px Archivo, sans-serif'
+  g.fillText('Total costura: ' + fmt(costuraTotal(curCode), 2) + ' min', pad, y + 46)
+  g.fillStyle = 'rgba(255,255,255,.78)'; g.font = "400 21px 'IBM Plex Sans', sans-serif"
+  g.fillText(rows.length + ' operaciones de costura · ' + conT + ' con tiempo' + (conT < rows.length ? ' · ' + (rows.length - conT) + ' pendiente(s)' : ''), pad, y + 78)
+  g.textAlign = 'right'; g.font = "400 20px 'IBM Plex Sans', sans-serif"; g.fillStyle = 'rgba(255,255,255,.7)'
+  g.fillText('Estudio de tiempos y movimientos' + (ultAct(curCode) ? ' · Act. ' + ultAct(curCode) : ''), W - pad, y + 78)
+  g.textAlign = 'left'
+  // salida
+  const url = cv.toDataURL('image/png')
+  _imgName = 'Costura_' + String(c.codigo).replace(/[^\w.-]+/g, '_') + '.png'
+  _imgBlob = await new Promise(res => cv.toBlob(res, 'image/png'))
+  openModal(`<h3>Imagen de costura · ${esc(c.codigo)}</h3>
+    <div class="hint" style="color:var(--muted);font-size:12.5px;margin-bottom:10px">Compártela con operarios y supervisores. En el celular también puedes mantener presionada la imagen para guardarla o enviarla.</div>
+    <img src="${url}" alt="Operaciones de costura" style="width:100%;border-radius:10px;border:1px solid var(--line);display:block">
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cerrar</button><button class="btn" data-act="copyImg">📋 Copiar imagen</button><button class="btn go" data-act="dlImg">⬇ Descargar imagen</button></div>`, true)
+}
+async function copyImg() {
+  if (!_imgBlob) { toast('Genera la imagen primero.'); return }
+  try {
+    if (!(navigator.clipboard && window.ClipboardItem)) throw new Error('nocb')
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': _imgBlob })])
+    toast('Imagen copiada. Pégala en WhatsApp con Ctrl+V.')
+  } catch (e) {
+    // reintento usando una promesa (Safari)
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': Promise.resolve(_imgBlob) })])
+      toast('Imagen copiada. Pégala en WhatsApp con Ctrl+V.')
+    } catch (e2) {
+      toast('Tu navegador no deja copiar aquí. Usa Descargar, o mantén presionada la imagen en el celular.')
+    }
+  }
+}
+function downloadBlob(blob, filename) {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob); a.download = filename
+  document.body.appendChild(a); a.click(); a.remove()
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000)
+}
+function dlImg() {
+  if (!_imgBlob) { toast('Genera la imagen primero.'); return }
+  downloadBlob(_imgBlob, _imgName); toast('Imagen descargada.')
+}
+
+/* ---------- export ---------- */
+function exportExcel() {
+  if (!dbReady) { toast('Espera a que carguen los datos.'); return }
+  if (!window.XLSX) { toast('No se pudo cargar el generador de Excel. Revisa la conexión.'); return }
+  const cods = codigos(); const tm = tipoMap()
+  const tRows = []; cods.forEach(c => { tiemposOf(c.codigo).forEach(r => { tRows.push({ Cliente: c.cliente, Codigo: c.codigo, Descripcion: c.descripcion, Linea: c.linea, Operacion: r.op, Tipo: tm[r.op] || '', Tiempo_estandar_min: r.min, Und_hora: (uph(r.min) != null ? +uph(r.min).toFixed(1) : ''), Observado_min: (typeof r.obs === 'number' ? r.obs : ''), Valoracion_pct: (typeof r.val === 'number' ? r.val : ''), Suplementos_pct: (typeof r.supl === 'number' ? r.supl : '') }) }) })
+  const estLabel = s => s === 'completo' ? 'Completo' : (s === 'incompleto' ? 'Incompleto' : 'Sin estudio')
+  const cRows = cods.map(c => ({ Codigo: c.codigo, Cliente: c.cliente, Descripcion: c.descripcion, Linea: c.linea, Estado: estLabel(statusCode(c.codigo)), Min_costura_total: hasTiempos(c.codigo) ? +costuraTotal(c.codigo).toFixed(2) : '', Actualizado: ultAct(c.codigo) || '' }))
+  const oRows = opList().map(o => ({ Operacion: o.nombre, Familia: o.familia, Tipo: o.tipo }))
+  const pRows = futuras().map(f => ({ Codigo: f.codigo, Cliente: f.cliente, Descripcion: f.descripcion, Linea: f.linea, Estado: estLabel(f.estado), Min_costura: f.estado === 'sin' ? '' : +f.costura.toFixed(2) }))
+  const X = window.XLSX
+  const wb = X.utils.book_new()
+  X.utils.book_append_sheet(wb, X.utils.json_to_sheet(tRows), 'Tiempos')
+  X.utils.book_append_sheet(wb, X.utils.json_to_sheet(cRows), 'Codigos')
+  X.utils.book_append_sheet(wb, X.utils.json_to_sheet(oRows), 'Operaciones')
+  X.utils.book_append_sheet(wb, X.utils.json_to_sheet(pRows), 'Produccion proxima')
+  const out = X.write(wb, { bookType: 'xlsx', type: 'array' })
+  downloadBlob(new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'Tiempos_Movimientos_SuperSacos.xlsx')
+  toast('Excel generado.')
+}
+
+/* ---------- navegación / render ---------- */
+function setTab(t) {
+  curTab = t; if (t !== 'codigos') curCode = null; document.querySelectorAll('nav.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t ? 'true' : 'false'))
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'p-' + t)); window.scrollTo(0, 0); render()
+}
+function render() {
+  if (curTab === 'resumen') renderResumen()
+  else if (curTab === 'codigos') renderCodigos()
+  else if (curTab === 'futura') renderFutura()
+  else if (curTab === 'operaciones') renderOperaciones()
+}
+document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)))
+document.getElementById('exportBtn').addEventListener('click', exportExcel)
+
+// Botones dentro de las tablas y ventanas: data-go abre un código,
+// data-act llama a la acción con su nombre (data-arg / data-arg2).
+const ACTIONS = {
+  closeModal, backToCodes, imgCostura, openHomologar, addRow, editCodigo, openCrono, verRegistro, delRow, doDelRow,
+  verRegToCrono, swRun, swLap, swReset, swSave, swSaveConfirm, swHideConfirm, doHomologarFull, addOneOp, editOp, copyImg, dlImg,
+}
+document.addEventListener('click', e => {
+  const go = e.target.closest('[data-go]'); if (go) { goCode(go.dataset.go); return }
+  const tab = e.target.closest('[data-tab-go]'); if (tab) { setTab(tab.dataset.tabGo); return }
+  const act = e.target.closest('[data-act]'); if (!act) return
+  const fn = ACTIONS[act.dataset.act]; if (fn) fn(act.dataset.arg, act.dataset.arg2)
+})
+
+/* tema */
+function applyTheme(t) { if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); else document.documentElement.removeAttribute('data-theme'); try { localStorage.setItem('ssth', t) } catch (e) {} }
+let theme = 'system'; try { theme = localStorage.getItem('ssth') || 'system' } catch (e) {} applyTheme(theme)
+document.getElementById('themeBtn').addEventListener('click', () => { theme = theme === 'dark' ? 'light' : (theme === 'light' ? 'system' : 'dark'); applyTheme(theme); toast('Tema: ' + (theme === 'system' ? 'del sistema' : theme === 'dark' ? 'oscuro' : 'claro')) })
+
+/* ---------- login / roles (Supabase Auth) ---------- */
+function setRole(perfil) {
+  PERFIL = perfil
+  ROLE = perfil && perfil.rol === 'admin' ? 'admin' : 'visita'
+  document.body.classList.toggle('visita', ROLE === 'visita')
+  const rc = document.getElementById('rolechip')
+  if (rc) rc.textContent = ROLE === 'admin' ? `${perfil.nombre} · Administrador` : `${perfil && perfil.nombre ? perfil.nombre + ' · ' : ''}Solo lectura`
+}
+async function entrar(session) {
+  const { data: perfil } = await supabase.from('perfiles').select('nombre, rol').eq('id', session.user.id).maybeSingle()
+  setRole(perfil || { nombre: session.user.email, rol: 'visita' })
+  document.getElementById('login').hidden = true
+  await loadAll()
+}
+function mostrarLogin() {
+  ROLE = null; PERFIL = null; document.body.classList.remove('visita')
+  const pw = document.getElementById('login-pw'); if (pw) pw.value = ''
+  const btn = document.getElementById('login-btn'); btn.disabled = false; btn.textContent = 'Ingresar al panel'
+  document.getElementById('login').hidden = false
+}
+document.getElementById('loginForm').addEventListener('submit', async e => {
+  e.preventDefault()
+  const err = document.getElementById('login-err'); err.hidden = true
+  const btn = document.getElementById('login-btn'); btn.disabled = true; btn.textContent = 'Entrando…'
+  const email = document.getElementById('login-email').value.trim()
+  const password = document.getElementById('login-pw').value
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+  btn.disabled = false; btn.textContent = 'Ingresar al panel'
+  if (error) { err.textContent = 'Correo o contraseña incorrectos. Intenta de nuevo.'; err.hidden = false }
+})
+document.getElementById('login-forgot').addEventListener('click', () => {
+  const n = document.getElementById('login-note')
+  n.innerHTML = 'Para restablecer tu contraseña, escríbele a <b>Said Meléndez</b>: <b>said.melendez@poliplastics.com</b>'; n.hidden = false
+})
+document.getElementById('logoutBtn').addEventListener('click', () => supabase.auth.signOut())
+
+let sesionActual = null
+supabase.auth.onAuthStateChange((_evt, session) => {
+  const antes = sesionActual && sesionActual.user.id
+  sesionActual = session
+  if (!session) { mostrarLogin(); return }
+  // Solo recarga cuando cambia el usuario (no en cada renovación del token).
+  if (session.user.id !== antes) setTimeout(() => entrar(session), 0)
+})
+
+render()

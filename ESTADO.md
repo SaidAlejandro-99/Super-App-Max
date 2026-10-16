@@ -2,7 +2,7 @@
 
 > Este archivo es el "relevo": resume en qué va el proyecto para que cualquiera
 > (una persona o una nueva sesión de Claude Code) retome sin perder el hilo.
-> Última actualización: 2026-10-15.
+> Última actualización: 2026-10-16.
 
 ## Qué es
 
@@ -26,16 +26,23 @@ La fórmula que une todo: **Eficiencia = Producción real (Módulo 2) ÷ Meta (M
   - `codigos`: 294
   - `tiempos`: 3.197 (152 códigos con tiempos; incluye 13 filas con muestras de
     cronómetro que Said midió en vivo — datos reales, no de la foto vieja)
-  - `perfiles` y `biorario_registros`: creadas, aún vacías
+  - `planning`: 84 códigos de producción futura (foto del MAESTRO_PROG, corte 2026-10-05),
+    y `config`, que guarda la fecha de corte del plan
+  - `perfiles`: 1 usuario (Said, `admin`). `biorario_registros`: creada, aún vacía
+  - Función `guardar_tiempos(codigo, filas)`: reemplaza en un solo paso los tiempos
+    de un código (la usa la app al editar). Cambios de esquema en `supabase/migrations/`.
   - Seguridad RLS activa: lectura para usuarios autenticados; escritura de
     tiempos/códigos/operaciones solo `admin`; escritura de biorario `admin` o `supervisor`.
-- **Frontend del Módulo 1** (Vite + JS puro + @supabase/supabase-js):
-  - Login con Supabase Auth (`src/main.js`)
-  - Lista de códigos con buscador (código, cliente, descripción, min de costura, min total, estado)
-  - Detalle por código: operaciones con tipo (Costura/Manual), tiempo, und/hora y nº de muestras
-  - Estilos con la paleta corporativa (`src/styles.css`): verde #1B4332, verde-claro #A8B826, amarillo #E9A820
-  - Por ahora es **solo lectura**; la edición (cronómetro, homologar, imagen de costura)
-    está en el panel-artefacto original y se portará aquí más adelante.
+- **Frontend del Módulo 1 completo** (Vite + JS puro + @supabase/supabase-js), con la
+  misma apariencia y funciones que el panel-artefacto original "Tiempos y Movimientos SS":
+  - Pestañas Resumen, Códigos, Producción futura y Operaciones
+  - Edición de tiempos, cronómetro (TO × valoración × suplementos), homologar desde otro
+    código, imagen de costura para WhatsApp, exportar a Excel y tema claro/oscuro
+  - Login con Supabase Auth; el rol `admin` edita y cualquier otro rol ve en solo lectura
+  - Verificado el 2026-10-16: los indicadores coinciden con el artefacto
+    (294 códigos, 150 completos, 84 en producción futura, 69 % cubierto)
+  - El artefacto original queda como respaldo; **desde ahora se edita aquí**
+    para no tener los datos en dos sitios.
 
 ## Lo que SIGUE (siguiente paso concreto)
 
@@ -49,8 +56,9 @@ Con esa foto se define:
 Y con eso se diseña la tabla definitiva (`biorario_registros` ya tiene una base)
 y la pantalla para que el supervisor lo digite igual que en el papel.
 
-Después del Biorario quedan, en orden: edición completa del Módulo 1 aquí,
-y conectar el Módulo 3 (eficiencia) a estos datos.
+Después del Biorario quedan, en orden: publicar la app en internet (Netlify)
+para que los supervisores entren desde el celular, cargar un plan de producción
+nuevo cuando cambie el MAESTRO_PROG y conectar el Módulo 3 (eficiencia).
 
 ## Cómo dejarlo corriendo en el computador
 

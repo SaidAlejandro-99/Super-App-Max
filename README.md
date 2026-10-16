@@ -6,7 +6,7 @@ del proyecto en Claude.
 
 ## Estado actual
 
-- [x] Módulo 1 — Métodos y Tiempos: datos migrados a Supabase (182 operaciones, 294 códigos, 3.197 tiempos) y visor web funcional (login + consulta de códigos y operaciones).
+- [x] Módulo 1 — Métodos y Tiempos: datos migrados a Supabase (182 operaciones, 294 códigos, 3.197 tiempos, 84 de producción futura) y panel web completo (resumen, edición de tiempos, cronómetro, homologar, imagen de costura, Excel).
 - [ ] Módulo 2 — Biorario: pendiente (a partir de la hoja manual de los supervisores).
 - [ ] Módulo 3 — SuperApp (eficiencia): ya existe en https://eficienciaplantasupersacos.netlify.app/, pendiente de conectar al final.
 
