@@ -6,9 +6,23 @@ del proyecto en Claude.
 
 ## Estado actual
 
-- [x] Módulo 1 — Métodos y Tiempos: funcional como artefacto en Claude, en migración aquí.
-- [ ] Módulo 2 — Biorario: en construcción.
+- [x] Módulo 1 — Métodos y Tiempos: datos migrados a Supabase (182 operaciones, 294 códigos, 3.197 tiempos) y visor web funcional (login + consulta de códigos y operaciones).
+- [ ] Módulo 2 — Biorario: pendiente (a partir de la hoja manual de los supervisores).
 - [ ] Módulo 3 — SuperApp (eficiencia): ya existe en https://eficienciaplantasupersacos.netlify.app/, pendiente de conectar al final.
+
+## Crear el primer administrador
+
+La app pide usuario y contraseña. Para tener el primer acceso:
+
+1. En Supabase: **Authentication → Users → Add user** (correo + contraseña). Copia el `User UID` que queda.
+2. En **SQL Editor**, registra su rol (reemplaza el UID y el nombre):
+
+   ```sql
+   insert into perfiles (id, nombre, rol)
+   values ('PEGA_AQUI_EL_UID', 'Said Meléndez', 'admin');
+   ```
+
+3. Ya puedes entrar con ese correo y contraseña.
 
 ## Cómo está armado
 
