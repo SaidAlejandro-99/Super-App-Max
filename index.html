@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>SuperApp · Planta Súper Sacos</title>
+    <title>SuperApp Max · Planta Súper Sacos</title>
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" />
     <link rel="stylesheet" href="/src/styles.css" />
@@ -14,8 +14,8 @@
       <form class="login-wrap" id="loginForm">
         <div class="login-mark">⏱</div>
         <div class="login-k">Planta Super Sacos</div>
-        <div class="login-title">Tiempos y Movimientos</div>
-        <div class="login-sub">Estudio de tiempos · Poliplastics</div>
+        <div class="login-title">SuperApp Max</div>
+        <div class="login-sub">Métodos y Tiempos · Bi-horario · Poliplastics</div>
         <div class="login-card">
           <label for="login-email">Correo</label>
           <div class="login-inp"><span>✉</span><input type="email" id="login-email" autocomplete="username" placeholder="tu@correo.com" required /></div>
@@ -30,26 +30,38 @@
     </div>
 
     <div class="topbar">
-      <div class="brand"><span class="t">Tiempos y Movimientos</span><span class="s">Planta Super Sacos · por código Dynamics</span></div>
+      <div class="brand"><span class="t" id="brandT">Tiempos y Movimientos</span><span class="s" id="brandS">Planta Super Sacos · por código Dynamics</span></div>
+      <div class="modsw" id="modsw" role="tablist" aria-label="Módulos">
+        <button data-mod="m1">Métodos y Tiempos</button>
+        <button data-mod="bh">Bi-horario</button>
+        <button data-mod="personal">Personal</button>
+      </div>
       <div class="spacer"></div>
+      <span class="tb-role" id="syncchip" hidden></span>
       <span class="tb-role" id="rolechip"></span>
       <button class="tb-btn" id="themeBtn" title="Tema">◐ Tema</button>
       <button class="tb-btn primary" id="exportBtn">⤓ Descargar Excel</button>
       <button class="tb-btn" id="logoutBtn" title="Cerrar sesión">Salir</button>
     </div>
-    <nav class="tabs" role="tablist">
-      <button role="tab" aria-selected="true" data-tab="resumen">Resumen</button>
-      <button role="tab" aria-selected="false" data-tab="codigos">Códigos</button>
-      <button role="tab" aria-selected="false" data-tab="futura">Producción futura</button>
-      <button role="tab" aria-selected="false" data-tab="operaciones">Operaciones</button>
-    </nav>
 
-    <div class="wrap">
-      <section class="panel active" id="p-resumen"></section>
-      <section class="panel" id="p-codigos"></section>
-      <section class="panel" id="p-futura"></section>
-      <section class="panel" id="p-operaciones"></section>
+    <div id="mod-m1">
+      <nav class="tabs" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="resumen">Resumen</button>
+        <button role="tab" aria-selected="false" data-tab="codigos">Códigos</button>
+        <button role="tab" aria-selected="false" data-tab="futura">Producción futura</button>
+        <button role="tab" aria-selected="false" data-tab="operaciones">Operaciones</button>
+      </nav>
+
+      <div class="wrap">
+        <section class="panel active" id="p-resumen"></section>
+        <section class="panel" id="p-codigos"></section>
+        <section class="panel" id="p-futura"></section>
+        <section class="panel" id="p-operaciones"></section>
+      </div>
     </div>
+
+    <div id="mod-bh" class="wrap wide" hidden></div>
+    <div id="mod-personal" class="wrap" hidden></div>
 
     <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
     <div class="notice" id="notice"></div>

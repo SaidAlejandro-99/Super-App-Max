@@ -1,5 +1,5 @@
 // Conexión central a Supabase (la bodega de datos + el portero).
-// Todos los módulos (Métodos y Tiempos, Biorario, SuperApp) importan
+// Todos los módulos (Métodos y Tiempos, Bi-horario, SuperApp) importan
 // este mismo cliente, así comparten la misma base de datos y el mismo login.
 import { createClient } from '@supabase/supabase-js'
 

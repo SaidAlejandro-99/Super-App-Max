@@ -1,4 +1,4 @@
-# Estado del proyecto — SuperApp Integrada (Planta Súper Sacos)
+# Estado del proyecto — SuperApp Max (Planta Súper Sacos)
 
 > Este archivo es el "relevo": resume en qué va el proyecto para que cualquiera
 > (una persona o una nueva sesión de Claude Code) retome sin perder el hilo.
@@ -10,11 +10,11 @@ App web para la Planta Súper Sacos de Poliplastics S.A.S. con **3 módulos**:
 
 1. **Módulo 1 — Métodos y Tiempos** (admin): consulta y edición de los tiempos
    estándar por código de referencia. **← lo que ya está construido.**
-2. **Módulo 2 — Biorario** (supervisor): digitalizar la hoja que hoy los
+2. **Módulo 2 — Bi-horario** (supervisor): digitalizar la hoja que hoy los
    supervisores llenan a mano cada hora con la producción real. **← lo siguiente.**
 3. **Módulo 3 — SuperApp de eficiencia** (operarios, acceso libre): ranking y
    eficiencia. Ya existe aparte en https://eficienciaplantasupersacos.netlify.app/
-   y se conectará al final, cuando el Biorario tenga datos.
+   y se conectará al final, cuando el Bi-horario tenga datos.
 
 La fórmula que une todo: **Eficiencia = Producción real (Módulo 2) ÷ Meta (Módulo 1).**
 
@@ -46,8 +46,8 @@ La fórmula que une todo: **Eficiencia = Producción real (Módulo 2) ÷ Meta (M
 
 ## Lo que SIGUE (siguiente paso concreto)
 
-**Construir el Módulo 2 (Biorario).** Está pendiente **una sola cosa de Said:
-la foto de la hoja del biorario** que los supervisores llenan a mano cada hora.
+**Construir el Módulo 2 (Bi-horario).** Está pendiente **una sola cosa de Said:
+la foto de la hoja del Bi-horario** que los supervisores llenan a mano cada hora.
 Con esa foto se define:
 - qué se anota cada hora (código, operario, cantidad/unidades, línea, turno…),
 - cómo está organizada la hoja,
@@ -56,7 +56,7 @@ Con esa foto se define:
 Y con eso se diseña la tabla definitiva (`biorario_registros` ya tiene una base)
 y la pantalla para que el supervisor lo digite igual que en el papel.
 
-Después del Biorario quedan, en orden: publicar la app en internet (Netlify)
+Después del Bi-horario quedan, en orden: publicar la app en internet (Netlify)
 para que los supervisores entren desde el celular, cargar un plan de producción
 nuevo cuando cambie el MAESTRO_PROG y conectar el Módulo 3 (eficiencia).
 

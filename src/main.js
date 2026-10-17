@@ -1,7 +1,11 @@
-// SuperApp Integrada — Planta Súper Sacos
+// SuperApp Max — Planta Súper Sacos
 // Módulo 1: Métodos y Tiempos. Es el mismo panel del artefacto original
 // ("Tiempos y Movimientos SS"), pero los datos viven en Supabase.
+// Este archivo también arma el selector de módulos (Bi-horario y Personal
+// viven en sus propios archivos).
 import { supabase } from './supabaseClient.js'
+import * as bihorario from './bihorario.js'
+import * as personal from './personal.js'
 
 /* ---------- estado ---------- */
 const D = {
@@ -87,6 +91,7 @@ async function loadAll() {
     toast('No se pudieron cargar los datos. Revisa la conexión.')
   }
   dbReady = true; render()
+  const m = MODULOS[curMod].mod; if (m && m.onM1Ready) m.onM1Ready()
 }
 
 /* ---------- Supabase: escritura ---------- */
@@ -735,18 +740,53 @@ function applyTheme(t) { if (t === 'light' || t === 'dark') document.documentEle
 let theme = 'system'; try { theme = localStorage.getItem('ssth') || 'system' } catch (e) {} applyTheme(theme)
 document.getElementById('themeBtn').addEventListener('click', () => { theme = theme === 'dark' ? 'light' : (theme === 'light' ? 'system' : 'dark'); applyTheme(theme); toast('Tema: ' + (theme === 'system' ? 'del sistema' : theme === 'dark' ? 'oscuro' : 'claro')) })
 
+/* ---------- módulos ---------- */
+const MODULOS = {
+  m1: { t: 'Tiempos y Movimientos', s: 'Planta Super Sacos · por código Dynamics', el: 'mod-m1' },
+  bh: { t: 'Bi-horario', s: 'Producción por hora · Planta Super Sacos', el: 'mod-bh', mod: bihorario },
+  personal: { t: 'Personal', s: 'Operarios y supervisores · Planta Super Sacos', el: 'mod-personal', mod: personal },
+}
+let curMod = 'm1'
+// Lo que los otros módulos necesitan de este archivo.
+const ctx = {
+  supabase, toast, openModal, closeModal, esc, fmt, fmt0, downloadBlob,
+  role: () => ROLE, perfil: () => PERFIL,
+  m1: { ready: () => dbReady, codigos, codeInfo, tiemposOf, tipoOf, opList, planning: () => D.planning },
+}
+function setModule(m) {
+  if (!MODULOS[m]) m = 'm1'
+  curMod = m
+  try { localStorage.setItem('ssmod', m) } catch (e) {}
+  for (const [k, v] of Object.entries(MODULOS)) document.getElementById(v.el).hidden = k !== m
+  document.querySelectorAll('#modsw button').forEach(b => b.setAttribute('aria-selected', b.dataset.mod === m ? 'true' : 'false'))
+  document.getElementById('brandT').textContent = MODULOS[m].t
+  document.getElementById('brandS').textContent = MODULOS[m].s
+  document.getElementById('exportBtn').hidden = m !== 'm1'
+  window.scrollTo(0, 0)
+  if (MODULOS[m].mod) MODULOS[m].mod.show()
+  else render()
+}
+document.querySelectorAll('#modsw button').forEach(b => b.addEventListener('click', () => setModule(b.dataset.mod)))
+bihorario.init(ctx)
+personal.init(ctx)
+
 /* ---------- login / roles (Supabase Auth) ---------- */
 function setRole(perfil) {
   PERFIL = perfil
-  ROLE = perfil && perfil.rol === 'admin' ? 'admin' : 'visita'
-  document.body.classList.toggle('visita', ROLE === 'visita')
+  // 'admin' edita todo; 'supervisor' llena el Bi-horario y ve el Módulo 1 en solo lectura.
+  ROLE = perfil && (perfil.rol === 'admin' || perfil.rol === 'supervisor') ? perfil.rol : 'visita'
+  document.body.classList.toggle('visita', ROLE !== 'admin')
+  document.body.classList.toggle('es-admin', ROLE === 'admin')
   const rc = document.getElementById('rolechip')
-  if (rc) rc.textContent = ROLE === 'admin' ? `${perfil.nombre} · Administrador` : `${perfil && perfil.nombre ? perfil.nombre + ' · ' : ''}Solo lectura`
+  const etiqueta = { admin: 'Administrador', supervisor: 'Supervisor', visita: 'Solo lectura' }[ROLE]
+  if (rc) rc.textContent = `${perfil && perfil.nombre ? perfil.nombre + ' · ' : ''}${etiqueta}`
 }
 async function entrar(session) {
-  const { data: perfil } = await supabase.from('perfiles').select('nombre, rol').eq('id', session.user.id).maybeSingle()
+  const { data: perfil } = await supabase.from('perfiles').select('nombre, rol, supervisor_cedula').eq('id', session.user.id).maybeSingle()
   setRole(perfil || { nombre: session.user.email, rol: 'visita' })
   document.getElementById('login').hidden = true
+  let guardado = null; try { guardado = localStorage.getItem('ssmod') } catch (e) {}
+  setModule(guardado || (ROLE === 'supervisor' ? 'bh' : 'm1'))
   await loadAll()
 }
 function mostrarLogin() {
