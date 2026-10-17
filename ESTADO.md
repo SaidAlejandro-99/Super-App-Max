@@ -44,21 +44,32 @@ La fórmula que une todo: **Eficiencia = Producción real (Módulo 2) ÷ Meta (M
   - El artefacto original queda como respaldo; **desde ahora se edita aquí**
     para no tener los datos en dos sitios.
 
+- **Módulo 2 — Bi-horario** (2026-10-16): turnos por línea, hoja por referencia,
+  bloques por operación con meta (Módulo 1 o manual), registro por hora con
+  tiempos muertos, eficiencia, cuello de botella, bloques que se contraen y
+  cierre del turno. Diseño y decisiones en `docs/BIHORARIO.md`.
+- **Personal**: 239 operarios activos y 6 supervisores cargados desde el Excel
+  de programación de Said (sin retirados ni administrativos).
+- **Publicada** en https://superapp-max.netlify.app (Netlify, plan gratis,
+  300 créditos/mes compartidos con la app de eficiencia).
+  - Se publica **a mano** y solo cuando Said aprueba una versión: cada
+    publicación gasta 15 créditos. El sitio no está ligado a GitHub a propósito.
+  - Para publicar: `deploy-site` del conector de Netlify (site id
+    `76bd75f6-cb0b-4444-86ef-5a9568057588`). Las variables `VITE_SUPABASE_*`
+    están configuradas en el sitio.
+- **Usuarios**: Said (`admin`) y Madais Santana (`supervisor`, piloto del
+  Bi-horario). Los usuarios se crean en Supabase → Authentication y luego se
+  liga su perfil (rol y cédula de supervisor) en la tabla `perfiles`.
+
 ## Lo que SIGUE (siguiente paso concreto)
 
-**Construir el Módulo 2 (Bi-horario).** Está pendiente **una sola cosa de Said:
-la foto de la hoja del Bi-horario** que los supervisores llenan a mano cada hora.
-Con esa foto se define:
-- qué se anota cada hora (código, operario, cantidad/unidades, línea, turno…),
-- cómo está organizada la hoja,
-- qué totales/cuentas se sacan.
+**Piloto del Bi-horario con Madais.** Antes de arrancar, borrar los turnos de
+prueba del 16-oct-2026 (4 Panel y U-panel). Ajustar con lo que salga del piloto.
 
-Y con eso se diseña la tabla definitiva (`biorario_registros` ya tiene una base)
-y la pantalla para que el supervisor lo digite igual que en el papel.
-
-Después del Bi-horario quedan, en orden: publicar la app en internet (Netlify)
-para que los supervisores entren desde el celular, cargar un plan de producción
-nuevo cuando cambie el MAESTRO_PROG y conectar el Módulo 3 (eficiencia).
+Después, en orden: crear usuarios de los demás supervisores, cargar un plan de
+producción nuevo cuando cambie el MAESTRO_PROG y construir el Módulo 3
+(eficiencia para operarios) dentro de esta app, liviano para no pasar los
+límites gratis de Supabase.
 
 ## Cómo dejarlo corriendo en el computador
 
