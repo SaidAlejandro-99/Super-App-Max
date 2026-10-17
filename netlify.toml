@@ -1,0 +1,9 @@
+# Publicación en Netlify (superapp-max.netlify.app).
+# Se publica a mano, solo cuando Said aprueba una versión: cada publicación
+# gasta 15 créditos del plan gratis. Ver ESTADO.md.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "24"
