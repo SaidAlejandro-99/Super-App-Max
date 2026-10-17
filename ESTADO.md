@@ -63,8 +63,8 @@ La fórmula que une todo: **Eficiencia = Producción real (Módulo 2) ÷ Meta (M
 
 ## Lo que SIGUE (siguiente paso concreto)
 
-**Piloto del Bi-horario con Madais.** Antes de arrancar, borrar los turnos de
-prueba del 16-oct-2026 (4 Panel y U-panel). Ajustar con lo que salga del piloto.
+**Piloto del Bi-horario con Madais.** Los turnos de prueba ya se borraron
+(17-oct-2026): el Bi-horario arranca limpio. Ajustar con lo que salga del piloto.
 
 Después, en orden: crear usuarios de los demás supervisores, cargar un plan de
 producción nuevo cuando cambie el MAESTRO_PROG y construir el Módulo 3
