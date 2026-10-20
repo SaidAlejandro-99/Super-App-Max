@@ -109,3 +109,25 @@ anota lo hecho en la hora y el acumulado. Al pie: personal indirecto
   corregirlo hasta **2 días** después; luego solo el admin.
 - Uso en planta: tableta (de preferencia) o celular. Guarda sin internet y
   sincroniza cuando vuelve la señal.
+
+## Ajustes del piloto (20-oct-2026)
+
+- **Meta obligatoria** en cada operación: Métodos y Tiempos, manual o, para
+  Revisión y Patinador, **meta del turno**.
+- **Meta del turno**: una por línea, se escribe al abrir el turno (editable).
+  Revisión y Patinador se califican al cierre: unidades fabricadas ÷ meta del turno.
+- **Cierre**: el supervisor escribe a mano las unidades fabricadas de cada código
+  (sin precarga). Es obligatorio para terminar.
+- **Polivalencia (opción A)**: si un operario que ya está en el turno se pone en
+  otra operación, la app pregunta a qué porcentaje medirlo: 50 %, 75 %, 90 % o
+  sin ajuste. Meta efectiva = meta × porcentaje. Se puede cambiar tocando la etiqueta.
+- **Líneas alternas**: nueva línea para liner, prensa y otras operaciones.
+- **Tarjetas de la lista**: operaciones clave con unidades y hasta qué hora
+  (Pegue tapa / Pegue solapa; en Circular también Pegue reata y DD5), avance contra
+  la meta del turno, personas, eficiencia, tiempo muerto y cuello de botella.
+- **Vista general** del turno: todas las referencias unidas por operación, con el
+  color de la referencia trabajada en cada hora.
+- **Proyección al cierre** (botón): total + promedio de las horas que sí tuvieron
+  producción × horas que faltan.
+- **Eliminar turno** completo: solo el administrador.
+- Pendiente: carga de pedidos, planning y personal desde Excel (punto 5).

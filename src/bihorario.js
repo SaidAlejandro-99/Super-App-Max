@@ -21,8 +21,12 @@ function guardarColapsados() { try { localStorage.setItem('bh_colapsados', JSON.
 export const LINEAS = [
   { v: 'CIRCULAR', t: 'Circular' }, { v: '4PANEL', t: '4 Panel' }, { v: 'UPANEL', t: 'U-panel' },
   { v: 'PANEL', t: 'Panel' }, { v: 'PORTASACOS', t: 'Portasacos' }, { v: 'CERROMATOSO', t: 'Cerro Matoso' },
-  { v: 'CONTAINER', t: 'Container' },
+  { v: 'CONTAINER', t: 'Container' }, { v: 'ALTERNAS', t: 'Líneas alternas' },
 ]
+// Vista del turno: 'hojas' (por referencia) o 'general' (todo unido por operación).
+let vistaTurno = 'hojas', verProyeccion = false
+// Colores para distinguir la referencia (cliente) en la vista general.
+const COLORES = ['#2b6b4f', '#c8870f', '#3a6ea5', '#8e44ad', '#b23b2e', '#16838a']
 const lineaTxt = v => (LINEAS.find(l => l.v === v) || { t: v }).t
 
 /* ---------- utilidades ---------- */
@@ -211,7 +215,7 @@ function metaEstudio(codigo, operacion) {
   const min = filas.reduce((s, r) => s + (+r.min || 0), 0)
   return filas.length && min > 0 ? Math.round((60 / min) * 10) / 10 : null
 }
-const reg = (asigId, h) => T.regs.get(asigId + '|' + h)
+const reg = (asigId, h) => T && T.regs.get(asigId + '|' + h)
 // Minutos disponibles de una hora: 60 menos el tiempo muerto que descuenta
 // (pérdida o manualidad). La llegada tarde no descuenta: se castiga.
 function minutosDisponibles(r) {
@@ -222,28 +226,73 @@ function minutosDisponibles(r) {
 }
 // Solo cuentan las horas que tienen algo registrado (unidades o novedad).
 const horaRegistrada = r => r && (r.unidades != null || r.tm_causa)
-function resumenAsig(a, bloque) {
+// Las funciones de cálculo reciben el turno (X) para poder usarse también en
+// las tarjetas de la lista, donde se calculan varios turnos a la vez.
+const regX = (X, asigId, h) => X.regs.get(asigId + '|' + h)
+// Calificación de revisión y patinador: unidades reportadas al cerrar ÷ meta del turno.
+function calificacionTurno(X) {
+  const meta = +X.turno.meta_turno || 0
+  const rep = X.hojas.filter(h => h.unidades_reportadas != null)
+  if (!meta || X.turno.estado !== 'terminado' || !rep.length) return null
+  return X.hojas.reduce((s, h) => s + (+h.unidades_reportadas || 0), 0) / meta
+}
+function resumenAsig(a, bloque, X = T) {
   let total = 0, disp = 0
   const acum = []
-  horasTurno(T.turno.turno, T.turno.fecha).forEach(({ i }) => {
-    const r = reg(a.id, i)
+  horasTurno(X.turno.turno, X.turno.fecha).forEach(({ i }) => {
+    const r = regX(X, a.id, i)
     if (horaRegistrada(r)) { total += +r.unidades || 0; disp += minutosDisponibles(r) }
     acum.push(total)
   })
-  const esperado = bloque.meta_hora ? bloque.meta_hora * disp / 60 : null
-  return { total, disp, acum, ef: esperado ? total / esperado : null }
+  if (bloque.meta_origen === 'turno') return { total, disp, acum, esperado: null, ef: calificacionTurno(X) }
+  // Polivalencia: la meta se pondera con el factor que eligió el supervisor.
+  const esperado = bloque.meta_hora ? bloque.meta_hora * (+a.factor || 1) * disp / 60 : null
+  return { total, disp, acum, esperado, ef: esperado ? total / esperado : null }
 }
-function resumenBloque(b) {
-  const horas = horasTurno(T.turno.turno, T.turno.fecha)
-  const asig = T.asig.filter(a => a.bloque_id === b.id)
-  const porHora = horas.map(({ i }) => asig.reduce((s, a) => s + (+(reg(a.id, i) || {}).unidades || 0), 0))
+function resumenBloque(b, X = T) {
+  const horas = horasTurno(X.turno.turno, X.turno.fecha)
+  const asig = X.asig.filter(a => a.bloque_id === b.id).sort((p, q) => p.orden - q.orden)
+  const porHora = horas.map(({ i }) => asig.reduce((s, a) => s + (+(regX(X, a.id, i) || {}).unidades || 0), 0))
   let acc = 0; const acum = porHora.map(v => (acc += v))
-  const res = asig.map(a => resumenAsig(a, b))
+  const res = asig.map(a => resumenAsig(a, b, X))
   const total = acc
-  const disp = res.reduce((s, r) => s + r.disp, 0)
-  const esperado = b.meta_hora ? b.meta_hora * disp / 60 : null
-  return { asig, porHora, acum, total, ef: esperado ? total / esperado : null }
+  if (b.meta_origen === 'turno') return { asig, porHora, acum, total, esperado: null, ef: calificacionTurno(X) }
+  const esperado = res.reduce((s, r) => s + (r.esperado || 0), 0)
+  return { asig, porHora, acum, total, esperado, ef: esperado ? total / esperado : null }
 }
+// Todo el turno agrupado por operación, sin importar la referencia (vista
+// general, tarjetas de la lista y proyección al cierre).
+function resumenOperaciones(X = T) {
+  const horas = horasTurno(X.turno.turno, X.turno.fecha)
+  const ordenHoja = new Map(X.hojas.map((h, i) => [h.id, h.orden ?? i]))
+  const bloques = [...X.bloques].sort((a, b) => (ordenHoja.get(a.hoja_id) - ordenHoja.get(b.hoja_id)) || (a.orden - b.orden))
+  const ops = new Map()
+  bloques.forEach(b => {
+    const r = resumenBloque(b, X)
+    let o = ops.get(b.operacion)
+    if (!o) { o = { operacion: b.operacion, porHora: horas.map(() => 0), hojasHora: horas.map(() => new Set()), personas: new Set(), esperado: 0, conMeta: false, turnoMeta: false }; ops.set(b.operacion, o) }
+    horas.forEach(({ i }) => { if (r.porHora[i]) { o.porHora[i] += r.porHora[i]; o.hojasHora[i].add(b.hoja_id) } })
+    r.asig.forEach(a => o.personas.add(a.cedula))
+    if (b.meta_origen === 'turno') o.turnoMeta = true
+    else if (r.esperado) { o.esperado += r.esperado; o.conMeta = true }
+  })
+  const lista = [...ops.values()].map(o => {
+    let acc = 0; const acum = o.porHora.map(v => (acc += v))
+    const conDato = o.porHora.map((v, i) => v ? i : -1).filter(i => i >= 0)
+    const ultima = conDato.length ? conDato[conDato.length - 1] : -1
+    // Proyección: promedio de las horas que sí tuvieron producción en esta operación,
+    // por las horas que faltan del turno.
+    const prom = conDato.length ? acc / conDato.length : 0
+    const proyeccion = ultima >= 0 ? Math.round(acc + prom * (horas.length - 1 - ultima)) : null
+    const ef = o.turnoMeta ? calificacionTurno(X) : (o.conMeta && o.esperado ? acc / o.esperado : null)
+    return { ...o, acum, total: acc, ultima, prom, proyeccion, ef }
+  })
+  return { horas, lista }
+}
+// Operaciones que marcan cuántos sacos van, según la línea.
+const CLAVES = { CIRCULAR: ['Pegue tapa', 'Pegue solapa', 'Pegue reata', 'Costura DD5'] }
+const clavesDe = linea => CLAVES[linea] || ['Pegue tapa', 'Pegue solapa']
+const esSalida = op => /^pegue (tapa|solapa)$/i.test(op)
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%'
 const efClase = v => v == null ? '' : v >= 0.95 ? 'ef-ok' : v >= 0.8 ? 'ef-med' : 'ef-bajo'
 
@@ -264,10 +313,56 @@ export async function show() {
 export function onM1Ready() { if (vista === 'turno' && T) pintarTurno() }
 
 /* ---------- vista: lista de turnos ---------- */
+// Trae todo lo de los turnos de una fecha para armar el resumen de cada tarjeta.
+async function cargarDia(turnos) {
+  const ids = turnos.map(t => t.id); if (!ids.length) return new Map()
+  const s = C.supabase
+  const [ho, bl, as, rg] = await Promise.all([
+    s.from('bh_hojas').select('*').in('turno_id', ids),
+    s.from('bh_bloques').select('*').in('turno_id', ids),
+    s.from('bh_asignaciones').select('*').in('turno_id', ids),
+    s.from('bh_registros').select('asignacion_id, hora, turno_id, unidades, tm_causa, tm_minutos').in('turno_id', ids).range(0, 19999),
+  ])
+  if (ho.error || bl.error || as.error || rg.error) return new Map()
+  const m = new Map()
+  turnos.forEach(t => m.set(t.id, { turno: t, hojas: ho.data.filter(x => x.turno_id === t.id), bloques: bl.data.filter(x => x.turno_id === t.id), asig: as.data.filter(x => x.turno_id === t.id), regs: new Map() }))
+  rg.data.forEach(r => { const X = m.get(r.turno_id); if (X) X.regs.set(r.asignacion_id + '|' + r.hora, r) })
+  return m
+}
+function resumenTarjeta(X) {
+  const { horas, lista } = resumenOperaciones(X)
+  const claves = clavesDe(X.turno.linea)
+  const mostrar = X.turno.linea === 'ALTERNAS' ? [...lista].sort((a, b) => b.total - a.total).slice(0, 3) : lista.filter(o => claves.includes(o.operacion))
+  const hasta = o => o.ultima >= 0 ? `hasta las ${horas[o.ultima].label}` : 'sin registros'
+  const personas = new Set(X.asig.map(a => a.cedula)).size
+  let esp = 0, tot = 0
+  lista.forEach(o => { if (!o.turnoMeta && o.conMeta) { esp += o.esperado; tot += o.total } })
+  let tm = 0; const porCausa = {}
+  X.regs.forEach(r => { const c = r.tm_causa && causa(r.tm_causa); if (c && c.tipo === 'perdida') { tm += +r.tm_minutos || 0; porCausa[c.codigo] = (porCausa[c.codigo] || 0) + (+r.tm_minutos || 0) } })
+  const top = Object.entries(porCausa).sort((a, b) => b[1] - a[1])[0]
+  const conGente = lista.filter(o => o.personas.size && o.total > 0 && !o.turnoMeta)
+  const cuello = conGente.length > 1 ? conGente.reduce((m, o) => o.total < m.total ? o : m) : null
+  const reportado = X.hojas.some(h => h.unidades_reportadas != null) ? X.hojas.reduce((s, h) => s + (+h.unidades_reportadas || 0), 0) : null
+  const salida = lista.filter(o => esSalida(o.operacion)).reduce((s, o) => s + o.total, 0)
+  const real = X.turno.estado === 'terminado' && reportado != null ? reportado : salida
+  const meta = +X.turno.meta_turno || 0
+  return `
+    ${mostrar.length ? `<div class="bh-card-ops">${mostrar.map(o => `<div><span>${C.esc(o.operacion)}</span><b>${C.fmt0(o.total)}</b><small>${hasta(o)}</small></div>`).join('')}</div>` : '<div class="muted" style="font-size:12px">Sin producción registrada</div>'}
+    ${meta ? `<div class="bh-card-meta"><div class="bar"><i class="b-si" style="width:${Math.min(100, Math.round(100 * real / meta))}%"></i></div>
+      <small>${X.turno.estado === 'terminado' && reportado != null ? 'Fabricado' : 'Salida'} ${C.fmt0(real)} de ${C.fmt0(meta)} (${Math.round(100 * real / meta)}%)</small></div>` : ''}
+    <div class="bh-card-kpis">
+      <span title="Personas">👥 ${personas}</span>
+      <span title="Eficiencia de la línea">Efic. <b class="${efClase(esp ? tot / esp : null)}">${pct(esp ? tot / esp : null)}</b></span>
+      <span title="Tiempo muerto">⏸ ${tm ? `${tm} min${top ? ' · ' + (top[0] === '411' ? 'DM' : top[0] === '425' ? 'FM' : top[0]) : ''}` : '0'}</span>
+    </div>
+    ${cuello && X.turno.estado === 'abierto' ? `<div class="bh-card-cuello">Cuello: ${C.esc(cuello.operacion)} (${C.fmt0(cuello.total)})</div>` : ''}`
+}
+
 async function pintarLista() {
-  vista = 'lista'; T = null
+  vista = 'lista'; T = null; vistaTurno = 'hojas'
   const { data, error } = await C.supabase.from('bh_turnos').select('*').eq('fecha', fechaLista).order('created_at')
   const turnos = error ? [] : data
+  const dia = await cargarDia(turnos)
   el.innerHTML = `
   <div class="bh-head">
     <div><h2>Bi-horario</h2><div class="hint">Producción por hora de cada operario. Elige un turno o abre uno nuevo.</div></div>
@@ -283,6 +378,7 @@ async function pintarLista() {
         <div class="bh-card-top"><b>${C.esc(lineaTxt(t.linea))}</b><span class="pill ${t.estado === 'abierto' ? 'si' : 'man'}">${t.estado === 'abierto' ? 'En curso' : 'Terminado'}</span></div>
         <div>${C.esc(turnoTxt(t.turno))}</div>
         <div class="muted">${C.esc([supNombre(t.supervisor_cedula), supNombre(t.supervisor2_cedula)].filter(Boolean).join(' · ') || 'Sin supervisor')}</div>
+        ${dia.has(t.id) ? resumenTarjeta(dia.get(t.id)) : ''}
       </button>`).join('') : `<div class="empty">No hay turnos abiertos el ${fechaTxt(fechaLista)}.</div>`}
   </div>`
   document.getElementById('bh-fecha').addEventListener('change', e => { fechaLista = e.target.value || hoyISO(); pintarLista() })
@@ -298,6 +394,7 @@ function modalNuevoTurno() {
     <div class="field"><label>Línea</label><select id="nt-linea">${LINEAS.map(l => `<option value="${l.v}">${l.t}</option>`).join('')}</select></div>
     <div class="field"><label>Supervisor</label><select id="nt-sup">${opt(p.supervisor_cedula)}</select></div>
     <div class="field"><label>Segundo supervisor (opcional)</label><select id="nt-sup2">${opt('')}</select></div>
+    <div class="field"><label>Meta del turno (sacos de la línea)</label><input type="number" id="nt-meta" inputmode="numeric" min="1" step="1" placeholder="Ej: 300"></div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="nt-ok">Abrir</button></div>`)
   document.getElementById('nt-ok').addEventListener('click', async () => {
     const fila = {
@@ -305,8 +402,10 @@ function modalNuevoTurno() {
       turno: document.getElementById('nt-turno').value, linea: document.getElementById('nt-linea').value,
       supervisor_cedula: document.getElementById('nt-sup').value || null,
       supervisor2_cedula: document.getElementById('nt-sup2').value || null,
+      meta_turno: +document.getElementById('nt-meta').value || null,
     }
     if (!fila.supervisor_cedula) { C.toast('Elige el supervisor.'); return }
+    if (!fila.meta_turno || fila.meta_turno <= 0) { C.toast('Escribe la meta del turno.'); return }
     // Si ese turno ya existe (lo abrió otro supervisor), se abre el mismo.
     const { data: ya } = await C.supabase.from('bh_turnos').select('id').match({ fecha: fila.fecha, turno: fila.turno, linea: fila.linea }).maybeSingle()
     C.closeModal()
@@ -314,7 +413,7 @@ function modalNuevoTurno() {
     T = { turno: { ...fila, estado: 'abierto', observaciones: '' }, hojas: [], bloques: [], asig: [], regs: new Map() }
     fechaLista = fila.fecha
     encolar('bh_turnos', 'upsert', fila)
-    vista = 'turno'; hojaActual = null; guardarCopia(); pintarTurno()
+    vista = 'turno'; vistaTurno = 'hojas'; hojaActual = null; guardarCopia(); pintarTurno()
     modalReferencia()
   })
 }
@@ -323,6 +422,7 @@ function modalNuevoTurno() {
 async function abrirTurno(id) {
   el.innerHTML = '<div class="loading">Abriendo turno…</div>'
   try { await cargarTurno(id) } catch (e) { console.error(e); C.toast('No se pudo abrir el turno.'); return pintarLista() }
+  if (vista !== 'turno') vistaTurno = 'hojas'
   vista = 'turno'
   if (!T.hojas.some(h => h.id === hojaActual)) hojaActual = T.hojas[0] ? T.hojas[0].id : null
   pintarTurno()
@@ -344,15 +444,58 @@ function pintarTurno() {
     </div>
     <div class="controls" style="margin:0">
       ${ed && t.estado === 'abierto' ? '<button class="btn go" data-a="terminar">✓ Terminar Bi-horario</button>' : ''}
-      ${ed && t.estado === 'terminado' ? '<button class="btn" data-a="terminar">Editar observaciones</button>' : ''}
+      ${ed && t.estado === 'terminado' ? '<button class="btn" data-a="terminar">Editar cierre</button>' : ''}
+      ${C.role() === 'admin' ? '<button class="btn ghost danger" data-a="eliminarTurno">Eliminar turno</button>' : ''}
     </div>
   </div>
+  <div class="bh-meta-turno">
+    <span>Meta del turno: <b>${t.meta_turno ? C.fmt0(t.meta_turno) : '—'}</b> sacos</span>
+    ${ed ? '<button class="btn sm ghost" data-a="metaTurno">✎</button>' : ''}
+    ${t.estado === 'terminado' && T.hojas.some(h => h.unidades_reportadas != null) ? `<span>· Fabricado: <b>${C.fmt0(T.hojas.reduce((s, h) => s + (+h.unidades_reportadas || 0), 0))}</b>${calificacionTurno(T) != null ? ` (<b class="${efClase(calificacionTurno(T))}">${pct(calificacionTurno(T))}</b>)` : ''}</span>` : ''}
+  </div>
   <div class="bh-hojas">
-    ${T.hojas.map(h => { const c = C.m1.codeInfo(h.codigo); return `<button class="bh-hoja ${h.id === hojaActual ? 'on' : ''}" data-a="hoja" data-id="${h.id}"><b class="mono">${C.esc(h.codigo)}</b><span>${C.esc(c.cliente || '')}</span></button>` }).join('')}
+    ${T.hojas.length ? `<button class="bh-hoja vista ${vistaTurno === 'general' ? 'on' : ''}" data-a="vistaGeneral"><b>▦ Vista general</b><span>Todo el turno por operación</span></button>` : ''}
+    ${T.hojas.map((h, i) => { const c = C.m1.codeInfo(h.codigo); return `<button class="bh-hoja ${vistaTurno === 'hojas' && h.id === hojaActual ? 'on' : ''}" data-a="hoja" data-id="${h.id}" style="border-left:4px solid ${COLORES[i % COLORES.length]}"><b class="mono">${C.esc(h.codigo)}</b><span>${C.esc(c.cliente || '')}</span></button>` }).join('')}
     ${ed ? '<button class="bh-hoja add" data-a="referencia">+ Referencia</button>' : ''}
   </div>
-  ${hoja ? pintarHoja(hoja, ed) : `<div class="empty">${ed ? 'Agrega la referencia (código del saco) que se va a trabajar.' : 'Este turno no tiene referencias.'}</div>`}
+  ${vistaTurno === 'general' && T.hojas.length ? pintarGeneral()
+    : hoja ? pintarHoja(hoja, ed) : `<div class="empty">${ed ? 'Agrega la referencia (código del saco) que se va a trabajar.' : 'Este turno no tiene referencias.'}</div>`}
   ${t.observaciones ? `<div class="section"><h2>Observaciones</h2><div style="white-space:pre-wrap">${C.esc(t.observaciones)}</div></div>` : ''}`
+}
+
+/* ---------- vista general: todo el turno unido por operación ---------- */
+function pintarGeneral() {
+  const { horas, lista } = resumenOperaciones(T)
+  const colorHoja = new Map(T.hojas.map((h, i) => [h.id, COLORES[i % COLORES.length]]))
+  const conGente = lista.filter(o => o.personas.size && o.total > 0 && !o.turnoMeta)
+  const cuello = conGente.length > 1 ? conGente.reduce((m, o) => o.total < m.total ? o : m) : null
+  // Fondo de la casilla con el color de la referencia; si en esa hora hubo dos, se parte en franjas.
+  const fondo = set => {
+    const cs = [...set].map(id => colorHoja.get(id) + '33')
+    if (!cs.length) return ''
+    if (cs.length === 1) return `background:${cs[0]}`
+    const paso = 100 / cs.length
+    return `background:linear-gradient(90deg,${cs.map((c, i) => `${c} ${i * paso}% ${(i + 1) * paso}%`).join(',')})`
+  }
+  return `
+  <div class="bh-hoja-bar">
+    <div class="bh-leyenda">${T.hojas.map(h => `<span><i style="background:${colorHoja.get(h.id)}"></i>${C.esc(h.codigo)} · ${C.esc(C.m1.codeInfo(h.codigo).cliente || '')}</span>`).join('')}</div>
+    <button class="btn sm ${verProyeccion ? 'go' : 'ghost'}" data-a="proyeccion">${verProyeccion ? '✓ Proyección al cierre' : 'Ver proyección al cierre'}</button>
+  </div>
+  ${cuello ? `<div class="banner bh-cuello">Cuello de botella del turno: <b>${C.esc(cuello.operacion)}</b> con ${C.fmt0(cuello.total)} sacos.</div>` : ''}
+  <div class="section bh-bloque" style="padding:10px">
+    <div class="tablebox bh-grid"><table>
+      <thead><tr><th class="bh-op">Operación</th>${horas.map(h => `<th class="num">${h.label}</th>`).join('')}<th class="num">Total</th><th class="num">Pers.</th><th class="num">Efic.</th>${verProyeccion ? '<th class="num">Proyección</th>' : ''}</tr></thead>
+      <tbody>${lista.map(o => `<tr class="${cuello && cuello.operacion === o.operacion ? 'bh-fila-cuello' : ''}">
+        <td class="bh-op"><span>${C.esc(o.operacion)}</span></td>
+        ${horas.map(h => `<td class="num bh-gcel" style="${fondo(o.hojasHora[h.i])}">${o.porHora[h.i] ? `<span class="bh-u">${C.fmt0(o.porHora[h.i])}</span><span class="bh-ac">${C.fmt0(o.acum[h.i])}</span>` : ''}</td>`).join('')}
+        <td class="num"><b>${C.fmt0(o.total)}</b></td><td class="num">${o.personas.size}</td>
+        <td class="num ${efClase(o.ef)}">${o.turnoMeta && o.ef == null ? '<small>al cierre</small>' : pct(o.ef)}</td>
+        ${verProyeccion ? `<td class="num bh-proy">${o.proyeccion != null ? `≈ <b>${C.fmt0(o.proyeccion)}</b><small>${C.fmt(o.prom, 1)}/h</small>` : '—'}</td>` : ''}
+      </tr>`).join('') || `<tr><td colspan="${horas.length + 4}" class="empty">Aún no hay operaciones.</td></tr>`}</tbody>
+    </table></div>
+    <div class="count">Cada casilla: arriba lo de la hora, abajo el acumulado. El color indica la referencia trabajada en esa hora.${verProyeccion ? ' La proyección supone que se sigue al mismo promedio por hora hasta el final del turno.' : ''}</div>
+  </div>`
 }
 
 function pintarHoja(hoja, ed) {
@@ -375,7 +518,8 @@ function pintarHoja(hoja, ed) {
 }
 
 function pintarBloque(b, r, horas, ed, esCuello) {
-  const meta = b.meta_hora != null ? `${C.fmt(b.meta_hora, b.meta_hora % 1 ? 1 : 0)}/h` : 'sin meta'
+  const meta = b.meta_origen === 'turno' ? `del turno (${C.fmt0(T.turno.meta_turno || 0)})` : b.meta_hora != null ? `${C.fmt(b.meta_hora, b.meta_hora % 1 ? 1 : 0)}/h` : 'sin meta'
+  const origen = { estudio: ['si', 'Métodos y Tiempos'], manual: ['inc', 'Manual'], turno: ['man', 'Meta del turno'] }[b.meta_origen] || ['inc', 'Manual']
   const contraido = colapsados.has(b.id)
   const titulo = `<button class="bh-toggle" data-a="toggleBloque" data-id="${b.id}" title="${contraido ? 'Ver personas' : 'Ocultar personas'}">
         <span class="bh-chev">${contraido ? '▸' : '▾'}</span><h2>${C.esc(b.operacion)}</h2><span class="muted" style="font-size:12px">${r.asig.length} pers.</span></button>`
@@ -383,7 +527,7 @@ function pintarBloque(b, r, horas, ed, esCuello) {
   <div class="section bh-bloque contraido ${esCuello ? 'cuello' : ''}">
     <div class="bh-bloque-head">
       <div>${titulo}
-        <div class="hint" style="margin:0">Meta <b>${meta}</b> · Total <b>${C.fmt0(r.total)}</b> · Eficiencia <b class="${efClase(r.ef)}">${pct(r.ef)}</b></div></div>
+        <div class="hint" style="margin:0">Meta <b>${meta}</b> · Total <b>${C.fmt0(r.total)}</b> · ${b.meta_origen === 'turno' ? 'Calificación' : 'Eficiencia'} <b class="${efClase(r.ef)}">${b.meta_origen === 'turno' && r.ef == null ? 'al cierre' : pct(r.ef)}</b></div></div>
     </div>
     <div class="tablebox bh-grid"><table>
       <thead><tr><th class="bh-op">Operación</th>${horas.map(h => `<th class="num">${h.label}</th>`).join('')}<th class="num">Total</th><th class="num">Efic.</th></tr></thead>
@@ -397,8 +541,8 @@ function pintarBloque(b, r, horas, ed, esCuello) {
   <div class="section bh-bloque ${esCuello ? 'cuello' : ''}">
     <div class="bh-bloque-head">
       <div>${titulo}
-        <div class="hint" style="margin:0">Meta <b>${meta}</b> · <span class="pill ${b.meta_origen === 'estudio' ? 'si' : 'inc'}">${b.meta_origen === 'estudio' ? 'Métodos y Tiempos' : 'Manual'}</span>
-        · Total <b>${C.fmt0(r.total)}</b> · Eficiencia <b class="${efClase(r.ef)}">${pct(r.ef)}</b></div></div>
+        <div class="hint" style="margin:0">Meta <b>${meta}</b> · <span class="pill ${origen[0]}">${origen[1]}</span>
+        · Total <b>${C.fmt0(r.total)}</b> · ${b.meta_origen === 'turno' ? 'Calificación' : 'Eficiencia'} <b class="${efClase(r.ef)}">${b.meta_origen === 'turno' && r.ef == null ? 'al cierre' : pct(r.ef)}</b></div></div>
       ${ed ? `<div class="controls" style="margin:0"><button class="btn sm go" data-a="personas" data-id="${b.id}">+ Persona</button>
         <button class="btn sm ghost" data-a="editarBloque" data-id="${b.id}">Meta</button>
         <button class="btn sm ghost danger" data-a="quitarBloque" data-id="${b.id}">Quitar</button></div>` : ''}
@@ -407,10 +551,10 @@ function pintarBloque(b, r, horas, ed, esCuello) {
       <thead><tr><th class="bh-op">Operario</th>${horas.map(h => `<th class="num">${h.label}</th>`).join('')}<th class="num">Total</th><th class="num">Efic.</th></tr></thead>
       <tbody>
         ${r.asig.map(a => { const ra = resumenAsig(a, b); return `<tr>
-          <td class="bh-op"><span>${C.esc(opNombre(a.cedula))}</span>${ed ? `<button class="bh-x" title="Quitar de esta operación" data-a="quitarAsig" data-id="${a.id}">×</button>` : ''}</td>
+          <td class="bh-op"><span>${C.esc(opNombre(a.cedula))}</span>${+a.factor < 1 ? `<button class="bh-factor" ${ed ? `data-a="factor" data-id="${a.id}"` : ''} title="Meta ponderada por polivalencia">${Math.round(a.factor * 100)}%</button>` : ''}${ed ? `<button class="bh-x" title="Quitar de esta operación" data-a="quitarAsig" data-id="${a.id}">×</button>` : ''}</td>
           ${horas.map(h => celda(a, h.i, ra.acum[h.i], ed)).join('')}
-          <td class="num"><b>${C.fmt0(ra.total)}</b></td><td class="num ${efClase(ra.ef)}">${pct(ra.ef)}</td></tr>` }).join('')}
-        ${r.asig.length ? `<tr class="bh-acum"><td class="bh-op">Acumulado operación</td>${horas.map(h => `<td class="num">${r.porHora[h.i] ? C.fmt0(r.acum[h.i]) : ''}</td>`).join('')}<td class="num"><b>${C.fmt0(r.total)}</b></td><td class="num ${efClase(r.ef)}">${pct(r.ef)}</td></tr>`
+          <td class="num"><b>${C.fmt0(ra.total)}</b></td><td class="num ${efClase(ra.ef)}">${b.meta_origen === 'turno' && ra.ef == null ? '—' : pct(ra.ef)}</td></tr>` }).join('')}
+        ${r.asig.length ? `<tr class="bh-acum"><td class="bh-op">Acumulado operación</td>${horas.map(h => `<td class="num">${r.porHora[h.i] ? `<span class="bh-acum-total">${C.fmt0(r.acum[h.i])}</span><span class="bh-acum-hora">${C.fmt0(r.porHora[h.i])}</span>` : ''}</td>`).join('')}<td class="num"><b>${C.fmt0(r.total)}</b></td><td class="num ${efClase(r.ef)}">${b.meta_origen === 'turno' && r.ef == null ? '—' : pct(r.ef)}</td></tr>`
           : `<tr><td colspan="${horas.length + 3}" class="empty">${ed ? 'Agrega a las personas de esta operación.' : 'Sin personas.'}</td></tr>`}
       </tbody>
     </table></div>
@@ -513,7 +657,7 @@ function modalReferencia() {
     const x = e.target.closest('[data-ref]'); if (!x) return
     const fila = { id: uid(), turno_id: T.turno.id, codigo: x.dataset.ref, orden: T.hojas.length }
     cambio('bh_hojas', 'upsert', fila)
-    hojaActual = fila.id
+    hojaActual = fila.id; vistaTurno = 'hojas'
     C.closeModal(); pintarTurno()
     modalOperacion()
   })
@@ -531,25 +675,44 @@ function modalOperacion(bloqueId) {
       ${delCodigo.length ? `<optgroup label="De esta referencia (con meta de Métodos y Tiempos)">${delCodigo.sort((x, y) => (tipo(x) === 'Costura' ? 0 : 1) - (tipo(y) === 'Costura' ? 0 : 1)).map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>` : ''}
       <optgroup label="Otras operaciones (meta manual)">${resto.map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>
     </select></div>`}
-    <div class="field"><label>Meta por hora (sacos)</label><input type="number" id="op-meta" min="0" step="0.1" inputmode="decimal"></div>
+    <div class="field"><label>Meta (obligatoria)</label><div class="bh-chips" id="op-tipo"></div></div>
+    <div class="field" id="op-metabox"><label>Meta por hora (sacos)</label><input type="number" id="op-meta" min="0" step="0.1" inputmode="decimal" placeholder="Ej: 25"></div>
     <div class="hint" id="op-hint" style="color:var(--muted);font-size:12.5px"></div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="op-ok">${b ? 'Guardar' : 'Agregar'}</button></div>`)
   const sel = document.getElementById('op-sel'), meta = document.getElementById('op-meta'), hint = document.getElementById('op-hint')
   const op = () => b ? b.operacion : sel.value
-  const refrescar = () => {
-    const m = metaEstudio(hoja.codigo, op())
-    if (b && b.meta_hora != null) meta.value = b.meta_hora
-    else meta.value = m ?? ''
-    hint.innerHTML = m != null ? `Métodos y Tiempos da <b>${C.fmt(m, 1)}/h</b> para esta referencia. Si la cambias, queda como meta manual solo para este turno.`
-      : 'Esta operación no tiene tiempo estudiado para esta referencia: escribe la meta (vale solo para este turno).'
+  // Revisión y patinador pueden calificarse con la meta del turno.
+  const admiteTurno = n => /revisi|patin/i.test(n || '')
+  let tipoMeta = b ? b.meta_origen : null
+  const refrescar = (cambioOp) => {
+    const n = op(), m = metaEstudio(hoja.codigo, n)
+    if (cambioOp || !tipoMeta) tipoMeta = admiteTurno(n) ? 'turno' : m != null ? 'estudio' : 'manual'
+    if (tipoMeta === 'estudio' && m == null) tipoMeta = 'manual'
+    if (tipoMeta === 'turno' && !admiteTurno(n)) tipoMeta = 'manual'
+    const opciones = [
+      m != null ? ['estudio', `Métodos y Tiempos · ${C.fmt(m, 1)}/h`] : null,
+      ['manual', 'Manual'],
+      admiteTurno(n) ? ['turno', `Meta del turno · ${C.fmt0(T.turno.meta_turno || 0)}`] : null,
+    ].filter(Boolean)
+    document.getElementById('op-tipo').innerHTML = opciones.map(([v, t]) => `<button type="button" class="bh-chip ${tipoMeta === v ? 'on' : ''}" data-t="${v}">${C.esc(t)}</button>`).join('')
+    document.getElementById('op-metabox').hidden = tipoMeta !== 'manual'
+    if (tipoMeta === 'manual' && (cambioOp || meta.value === '')) meta.value = b && b.meta_origen === 'manual' && b.meta_hora != null ? b.meta_hora : ''
+    hint.innerHTML = tipoMeta === 'estudio' ? 'Meta del estudio de Métodos y Tiempos para esta referencia.'
+      : tipoMeta === 'turno' ? 'Se califica al cerrar: unidades fabricadas del turno ÷ meta del turno.'
+      : m != null ? 'Meta escrita a mano: vale solo para este turno.' : 'Esta operación no tiene tiempo estudiado para esta referencia: escribe la meta (vale solo para este turno).'
   }
-  if (sel) { const primera = [...sel.options].find(o => !o.disabled); if (primera) sel.value = primera.value; sel.addEventListener('change', () => { b ? null : (meta.value = ''); refrescar() }) }
-  refrescar()
+  document.getElementById('op-tipo').addEventListener('click', e => { const x = e.target.closest('[data-t]'); if (!x) return; tipoMeta = x.dataset.t; refrescar(false); if (tipoMeta === 'manual') meta.focus() })
+  if (sel) { const primera = [...sel.options].find(o => !o.disabled); if (primera) sel.value = primera.value; sel.addEventListener('change', () => refrescar(true)) }
+  refrescar(false)
   document.getElementById('op-ok').addEventListener('click', () => {
     const nombre = op(); if (!nombre) { C.toast('Elige la operación.'); return }
-    const mv = meta.value === '' ? null : Math.max(0, +meta.value)
-    const m = metaEstudio(hoja.codigo, nombre)
-    const origen = m != null && mv === m ? 'estudio' : 'manual'
+    let mv = null
+    if (tipoMeta === 'estudio') mv = metaEstudio(hoja.codigo, nombre)
+    else if (tipoMeta === 'manual') {
+      mv = meta.value === '' ? null : +meta.value
+      if (!mv || mv <= 0) { C.toast('Escribe la meta por hora: sin meta no se puede medir.'); meta.focus(); return }
+    } else if (!T.turno.meta_turno) { C.toast('Primero escribe la meta del turno (arriba, en ✎).'); return }
+    const origen = tipoMeta
     if (b) cambio('bh_bloques', 'upsert', { ...b, meta_hora: mv, meta_origen: origen })
     else {
       const fila = { id: uid(), turno_id: T.turno.id, hoja_id: hoja.id, operacion: nombre, meta_hora: mv, meta_origen: origen, orden: T.bloques.filter(x => x.hoja_id === hoja.id).length }
@@ -592,15 +755,43 @@ function modalPersonas(bloqueId) {
     tr.classList.toggle('on', elegidos.has(c)); tr.querySelector('input').checked = elegidos.has(c)
     document.getElementById('pe-ok').textContent = `Agregar (${elegidos.size})`
   })
-  document.getElementById('pe-ok').addEventListener('click', () => {
+  document.getElementById('pe-ok').addEventListener('click', async () => {
     let orden = T.asig.filter(a => a.bloque_id === b.id).length
-    elegidos.forEach(ced => cambio('bh_asignaciones', 'upsert', { id: uid(), turno_id: T.turno.id, bloque_id: b.id, cedula: ced, orden: orden++ }))
+    const lista = [...elegidos]
+    C.closeModal()
+    // Polivalencia: si la persona ya trabaja en otra operación del turno, se pregunta cómo ponderar su meta.
+    for (const ced of lista) {
+      const factor = enTurno.has(ced) && b.meta_origen !== 'turno' ? await preguntarFactor(ced, b) : 1
+      cambio('bh_asignaciones', 'upsert', { id: uid(), turno_id: T.turno.id, bloque_id: b.id, cedula: ced, orden: orden++, factor })
+    }
     C.closeModal(); pintarTurno()
   })
   document.getElementById('pe-nueva').addEventListener('click', () => modalPersonaNueva(ced => {
     cambio('bh_asignaciones', 'upsert', { id: uid(), turno_id: T.turno.id, bloque_id: b.id, cedula: ced, orden: T.asig.filter(a => a.bloque_id === b.id).length })
     pintarTurno()
   }, linea))
+}
+
+// Pregunta cómo ponderar la meta de alguien que pasa a otra operación en el mismo turno.
+// Devuelve 0.5, 0.75, 0.9 o 1 (sin ajuste).
+function preguntarFactor(ced, bloque, actual) {
+  return new Promise(resolve => {
+    const otras = T.asig.filter(a => a.cedula === ced && a.bloque_id !== bloque.id).map(a => {
+      const bl = T.bloques.find(x => x.id === a.bloque_id)
+      const horasReg = horasTurno(T.turno.turno, T.turno.fecha).filter(h => horaRegistrada(reg(a.id, h.i))).length
+      return `${bl ? bl.operacion : ''}${horasReg ? ` (${horasReg} h)` : ''}`
+    })
+    C.openModal(`<h3>${C.esc(opNombre(ced))} cambia de operación</h3>
+      <div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:12px">Venía en <b>${C.esc(otras.join(', ') || 'otra operación')}</b> y pasa a <b>${C.esc(bloque.operacion)}</b>.
+        ¿A qué porcentaje de la meta lo vas a medir en esta operación?</div>
+      <div class="bh-chips bh-factores">${[[0.5, '50 %'], [0.75, '75 %'], [0.9, '90 %'], [1, 'Sin ajuste']].map(([v, t]) => `<button type="button" class="bh-chip ${actual === v ? 'on' : ''}" data-f="${v}">${t}</button>`).join('')}</div>
+      <div class="hint" style="color:var(--muted);font-size:12px;margin-top:10px">Ejemplo: meta 40/h al 75 % → se le mide contra 30/h.</div>`)
+    document.querySelector('.bh-factores').addEventListener('click', e => { const x = e.target.closest('[data-f]'); if (!x) return; resolve(+x.dataset.f) })
+    // Si cierran la ventana sin elegir, queda sin ajuste.
+    const bg = document.getElementById('modalBg')
+    const alCerrar = e => { if (e.target.id === 'modalBg') { bg.removeEventListener('click', alCerrar); resolve(actual || 1) } }
+    bg.addEventListener('click', alCerrar)
+  })
 }
 
 // También la usa el módulo Personal.
@@ -633,16 +824,35 @@ export function modalPersonaNueva(alGuardar, lineaDef = '') {
 function modalTerminar() {
   const t = T.turno
   const sinRegistro = T.asig.filter(a => !horasTurno(t.turno, t.fecha).some(h => horaRegistrada(reg(a.id, h.i)))).length
-  C.openModal(`<h3>${t.estado === 'abierto' ? 'Terminar Bi-horario' : 'Observaciones'}</h3>
+  C.openModal(`<h3>${t.estado === 'abierto' ? 'Terminar Bi-horario' : 'Cierre del turno'}</h3>
     ${t.estado === 'abierto' ? `<div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:10px">Al terminar, el turno queda cerrado. Podrás corregirlo hasta 2 días después.${sinRegistro ? ` <b>Ojo: ${sinRegistro} persona(s) no tienen ninguna hora registrada.</b>` : ''}</div>` : ''}
-    <div class="field"><label>Observaciones (personal de revisión, amarre, soplado, patinador, pie de máquina, novedades…)</label>
-      <textarea id="tt-obs" rows="5" style="width:100%;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)">${C.esc(t.observaciones || '')}</textarea></div>
+    <div class="field"><label>Unidades fabricadas en el turno (sacos completos de cada código)</label>
+      <div class="bh-cierre">${T.hojas.map(h => `<div><span><b class="mono">${C.esc(h.codigo)}</b><small>${C.esc(C.m1.codeInfo(h.codigo).cliente || '')}</small></span>
+        <input type="number" class="tt-uni" data-id="${h.id}" inputmode="numeric" min="0" step="1" placeholder="0" value="${h.unidades_reportadas ?? ''}"></div>`).join('') || '<div class="muted">Este turno no tiene referencias.</div>'}</div>
+      <div class="hint" style="color:var(--muted);font-size:12px;margin-top:6px">Meta del turno: <b>${C.fmt0(t.meta_turno || 0)}</b>. Con esto se califica a revisión y patinadores.</div></div>
+    <div class="field"><label>Observaciones (personal de amarre, soplado, pie de máquina, novedades…)</label>
+      <textarea id="tt-obs" rows="4" style="width:100%;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)">${C.esc(t.observaciones || '')}</textarea></div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="tt-ok">${t.estado === 'abierto' ? '✓ Terminar' : 'Guardar'}</button></div>`)
   document.getElementById('tt-ok').addEventListener('click', () => {
+    const inputs = [...document.querySelectorAll('.tt-uni')]
+    if (inputs.some(i => i.value === '')) { C.toast('Escribe las unidades fabricadas de cada código (0 si no se terminó ninguno).'); return }
+    inputs.forEach(i => { const h = T.hojas.find(x => x.id === i.dataset.id); if (h) cambio('bh_hojas', 'upsert', { ...h, unidades_reportadas: Math.max(0, +i.value) }) })
     const set = { observaciones: document.getElementById('tt-obs').value.trim() }
     if (t.estado === 'abierto') { set.estado = 'terminado'; set.terminado_at = new Date().toISOString() }
     cambio('bh_turnos', 'update', { set, match: { id: t.id } })
-    C.closeModal(); C.toast(set.estado ? 'Bi-horario terminado.' : 'Observaciones guardadas.'); pintarTurno()
+    C.closeModal(); C.toast(set.estado ? 'Bi-horario terminado.' : 'Cierre guardado.'); pintarTurno()
+  })
+}
+
+function modalMetaTurno() {
+  C.openModal(`<h3>Meta del turno</h3>
+    <div class="field"><label>Sacos de la línea en el turno</label><input type="number" id="mt-v" inputmode="numeric" min="1" step="1" value="${T.turno.meta_turno ?? ''}"></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="mt-ok">Guardar</button></div>`)
+  const i = document.getElementById('mt-v'); setTimeout(() => i.focus(), 50)
+  document.getElementById('mt-ok').addEventListener('click', () => {
+    const v = +i.value; if (!v || v <= 0) { C.toast('Escribe la meta del turno.'); return }
+    cambio('bh_turnos', 'update', { set: { meta_turno: v }, match: { id: T.turno.id } })
+    C.closeModal(); pintarTurno()
   })
 }
 
@@ -661,7 +871,28 @@ async function onClick(e) {
     case 'nuevoTurno': return modalNuevoTurno()
     case 'abrir': return abrirTurno(id)
     case 'volver': return pintarLista()
-    case 'hoja': hojaActual = id; return pintarTurno()
+    case 'hoja': hojaActual = id; vistaTurno = 'hojas'; return pintarTurno()
+    case 'vistaGeneral': vistaTurno = 'general'; return pintarTurno()
+    case 'proyeccion': verProyeccion = !verProyeccion; return pintarTurno()
+    case 'metaTurno': return modalMetaTurno()
+    case 'factor': {
+      const a = T.asig.find(y => y.id === id); if (!a) return
+      const f = await preguntarFactor(a.cedula, T.bloques.find(b => b.id === a.bloque_id), +a.factor)
+      cambio('bh_asignaciones', 'upsert', { ...a, factor: f }); C.closeModal(); return pintarTurno()
+    }
+    case 'eliminarTurno': {
+      const t = T.turno
+      C.openModal(`<h3>Eliminar turno</h3><div class="hint" style="color:var(--muted);font-size:13px">¿Eliminar el turno <b>${C.esc(lineaTxt(t.linea))} · ${C.esc(turnoTxt(t.turno))}</b> del ${fechaTxt(t.fecha)} con todas sus referencias, operaciones y registros? <b>No se puede deshacer.</b></div>
+        <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn danger" id="el-ok">Sí, eliminar</button></div>`)
+      document.getElementById('el-ok').addEventListener('click', async () => {
+        encolar('bh_turnos', 'delete', { id: t.id })
+        // Espera a que la cola termine de enviar (máx. 8 s) para que la lista ya no lo muestre.
+        for (let i = 0; i < 40 && cola.length; i++) { await enviar(); await new Promise(r => setTimeout(r, 200)) }
+        try { localStorage.removeItem('bh_turno_' + t.id) } catch (e) {}
+        C.closeModal(); C.toast('Turno eliminado.'); pintarLista()
+      })
+      return
+    }
     case 'toggleBloque': colapsados.has(id) ? colapsados.delete(id) : colapsados.add(id); guardarColapsados(); return pintarTurno()
     case 'toggleTodos': {
       const ids = T.bloques.filter(b => b.hoja_id === hojaActual).map(b => b.id)

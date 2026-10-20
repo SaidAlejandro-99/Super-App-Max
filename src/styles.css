@@ -283,3 +283,42 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
   .topbar .tb-btn{padding:5px 9px;font-size:12px}
   .tb-role{font-size:11px;padding:3px 8px}
 }
+
+/* ===== Bi-horario: ajustes del piloto ===== */
+.bh-card{gap:6px}
+.bh-card-ops{display:flex;flex-direction:column;gap:3px;margin-top:4px;padding-top:8px;border-top:1px dashed var(--line)}
+.bh-card-ops div{display:flex;align-items:baseline;gap:6px;font-size:13px}
+.bh-card-ops span{flex:1;color:var(--muted)}
+.bh-card-ops b{font-family:"IBM Plex Mono",monospace;font-size:15px}
+.bh-card-ops small{color:var(--muted);font-size:11px;min-width:84px;text-align:right}
+.bh-card-meta small{display:block;font-size:11.5px;color:var(--muted);margin-top:4px}
+.bh-card-meta .bar{height:8px}
+.bh-card-kpis{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.bh-card-kpis b{color:var(--fg)}
+.bh-card-cuello{font-size:12px;color:var(--warn);background:var(--warn-bg);border-radius:6px;padding:3px 8px}
+.bh-meta-turno{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13.5px;margin:-4px 0 10px;color:var(--muted)}
+.bh-meta-turno b{color:var(--fg)}
+.bh-hoja.vista{border-style:solid;background:var(--surface-2)}
+.bh-hoja.vista b{font-family:inherit}
+.bh-leyenda{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--muted)}
+.bh-leyenda span{display:inline-flex;align-items:center;gap:5px}
+.bh-leyenda i{width:12px;height:12px;border-radius:3px;display:inline-block}
+.bh-gcel{border-left:1px solid var(--line);min-width:52px;text-align:center!important}
+.bh-fila-cuello td{box-shadow:inset 0 2px 0 var(--amber),inset 0 -2px 0 var(--amber)}
+.bh-proy b{font-size:14px}
+.bh-proy small{display:block;font-size:10.5px;color:var(--muted)}
+.bh-factor{background:var(--warn-bg);color:var(--warn);border:none;border-radius:999px;font-size:10.5px;font-weight:700;padding:1px 6px;margin-left:6px;vertical-align:middle}
+.bh-cierre{display:flex;flex-direction:column;gap:8px}
+.bh-cierre div{display:flex;align-items:center;gap:10px}
+.bh-cierre span{flex:1;min-width:0;display:flex;flex-direction:column}
+.bh-cierre small{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bh-cierre input{width:110px;font-size:18px;text-align:center}
+.bh-acum .bh-u{font-size:13px}
+/* Fila "Acumulado operación": el acumulado grande, lo de la hora pequeño y gris */
+.bh-acum-total{display:block;font-size:15px;font-weight:700;color:var(--green-soft);line-height:1.1}
+.bh-acum-hora{display:block;font-size:10.5px;font-weight:500;color:var(--muted);line-height:1.1}
+/* El nombre se recorta para que la etiqueta de ponderación y la × siempre se vean */
+.bh-grid tbody td.bh-op{white-space:nowrap}
+.bh-grid tbody td.bh-op > span:first-child{display:inline-block;max-width:calc(100% - 62px);overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.bh-grid tbody tr.bh-acum td.bh-op > span:first-child,.bh-grid tbody td.bh-op:only-child > span{max-width:none}
+.bh-x{float:none;vertical-align:middle}
