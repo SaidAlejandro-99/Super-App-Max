@@ -445,6 +445,7 @@ function pintarTurno() {
     <div class="controls" style="margin:0">
       ${ed && t.estado === 'abierto' ? '<button class="btn go" data-a="terminar">✓ Terminar Bi-horario</button>' : ''}
       ${ed && t.estado === 'terminado' ? '<button class="btn" data-a="terminar">Editar cierre</button>' : ''}
+      ${ed ? '<button class="btn ghost" data-a="editarTurno">✎ Editar turno</button>' : ''}
       ${C.role() === 'admin' ? '<button class="btn ghost danger" data-a="eliminarTurno">Eliminar turno</button>' : ''}
     </div>
   </div>
@@ -509,7 +510,10 @@ function pintarHoja(hoja, ed) {
   return `
   <div class="bh-hoja-bar">
     <div class="hint" style="margin:0">${C.esc([c.descripcion, c.linea ? 'Línea ' + c.linea : ''].filter(Boolean).join(' · '))}</div>
-    ${bloques.length ? `<button class="btn sm ghost" data-a="toggleTodos">${todosContraidos ? '▾ Expandir todo' : '▸ Contraer todo'}</button>` : ''}
+    <div class="controls" style="margin:0">
+      ${ed ? `<button class="btn sm ghost" data-a="editarHoja" data-id="${hoja.id}">✎ Cambiar código</button>` : ''}
+      ${bloques.length ? `<button class="btn sm ghost" data-a="toggleTodos">${todosContraidos ? '▾ Expandir todo' : '▸ Contraer todo'}</button>` : ''}
+    </div>
   </div>
   ${cuello ? `<div class="banner bh-cuello">Cuello de botella: <b>${C.esc(cuello.operacion)}</b> con ${C.fmt0(res.get(cuello.id).total)} sacos acumulados.</div>` : ''}
   ${bloques.map(b => pintarBloque(b, res.get(b.id), horas, ed, cuello && cuello.id === b.id)).join('')}
@@ -544,14 +548,14 @@ function pintarBloque(b, r, horas, ed, esCuello) {
         <div class="hint" style="margin:0">Meta <b>${meta}</b> · <span class="pill ${origen[0]}">${origen[1]}</span>
         · Total <b>${C.fmt0(r.total)}</b> · ${b.meta_origen === 'turno' ? 'Calificación' : 'Eficiencia'} <b class="${efClase(r.ef)}">${b.meta_origen === 'turno' && r.ef == null ? 'al cierre' : pct(r.ef)}</b></div></div>
       ${ed ? `<div class="controls" style="margin:0"><button class="btn sm go" data-a="personas" data-id="${b.id}">+ Persona</button>
-        <button class="btn sm ghost" data-a="editarBloque" data-id="${b.id}">Meta</button>
+        <button class="btn sm ghost" data-a="editarBloque" data-id="${b.id}">✎ Editar</button>
         <button class="btn sm ghost danger" data-a="quitarBloque" data-id="${b.id}">Quitar</button></div>` : ''}
     </div>
     <div class="tablebox bh-grid"><table>
       <thead><tr><th class="bh-op">Operario</th>${horas.map(h => `<th class="num">${h.label}</th>`).join('')}<th class="num">Total</th><th class="num">Efic.</th></tr></thead>
       <tbody>
         ${r.asig.map(a => { const ra = resumenAsig(a, b); return `<tr>
-          <td class="bh-op"><span>${C.esc(opNombre(a.cedula))}</span>${+a.factor < 1 ? `<button class="bh-factor" ${ed ? `data-a="factor" data-id="${a.id}"` : ''} title="Meta ponderada por polivalencia">${Math.round(a.factor * 100)}%</button>` : ''}${ed ? `<button class="bh-x" title="Quitar de esta operación" data-a="quitarAsig" data-id="${a.id}">×</button>` : ''}</td>
+          <td class="bh-op"><span ${ed ? `class="bh-nombre" data-a="editarAsig" data-id="${a.id}" title="Editar persona"` : ''}>${C.esc(opNombre(a.cedula))}</span>${+a.factor < 1 ? `<button class="bh-factor" ${ed ? `data-a="factor" data-id="${a.id}"` : ''} title="Meta ponderada por polivalencia">${Math.round(a.factor * 100)}%</button>` : ''}${ed ? `<button class="bh-x" title="Quitar de esta operación" data-a="quitarAsig" data-id="${a.id}">×</button>` : ''}</td>
           ${horas.map(h => celda(a, h.i, ra.acum[h.i], ed)).join('')}
           <td class="num"><b>${C.fmt0(ra.total)}</b></td><td class="num ${efClase(ra.ef)}">${b.meta_origen === 'turno' && ra.ef == null ? '—' : pct(ra.ef)}</td></tr>` }).join('')}
         ${r.asig.length ? `<tr class="bh-acum"><td class="bh-op">Acumulado operación</td>${horas.map(h => `<td class="num">${r.porHora[h.i] ? `<span class="bh-acum-total">${C.fmt0(r.acum[h.i])}</span><span class="bh-acum-hora">${C.fmt0(r.porHora[h.i])}</span>` : ''}</td>`).join('')}<td class="num"><b>${C.fmt0(r.total)}</b></td><td class="num ${efClase(r.ef)}">${b.meta_origen === 'turno' && r.ef == null ? '—' : pct(r.ef)}</td></tr>`
@@ -635,10 +639,12 @@ function modalCelda(asigId, h) {
 }
 
 /* ---------- referencia, operación, personas ---------- */
-function modalReferencia() {
+function modalReferencia(hojaEditar) {
   const cods = C.m1.codigos()
-  C.openModal(`<h3>Agregar referencia</h3>
-    <div class="hint" style="color:var(--muted);font-size:12.5px">El código del saco que se va a trabajar. Si cambian de referencia en el turno, se agrega otra.</div>
+  const he = hojaEditar ? T.hojas.find(h => h.id === hojaEditar) : null
+  C.openModal(`<h3>${he ? 'Cambiar código de la referencia' : 'Agregar referencia'}</h3>
+    <div class="hint" style="color:var(--muted);font-size:12.5px">${he ? `Hoy es <b class="mono">${C.esc(he.codigo)}</b>. Se conservan las operaciones, personas y horas registradas; las metas de Métodos y Tiempos se recalculan con el código nuevo.`
+      : 'El código del saco que se va a trabajar. Si cambian de referencia en el turno, se agrega otra.'}</div>
     <input class="search" style="width:100%;margin-top:10px" type="search" id="rf-q" placeholder="Buscar código o cliente…" autocomplete="off">
     <div class="hlist" id="rf-res"></div>`, true)
   const linea = T.turno.linea
@@ -655,6 +661,21 @@ function modalReferencia() {
   document.getElementById('rf-q').addEventListener('input', e => draw(e.target.value))
   document.getElementById('rf-res').addEventListener('click', e => {
     const x = e.target.closest('[data-ref]'); if (!x) return
+    if (he) {
+      const nuevo = x.dataset.ref
+      cambio('bh_hojas', 'upsert', { ...he, codigo: nuevo })
+      // Las metas del estudio dependen del código: se recalculan; si el código nuevo
+      // no tiene esa operación estudiada, la meta se conserva como manual.
+      const sinEstudio = []
+      T.bloques.filter(b => b.hoja_id === he.id && b.meta_origen === 'estudio').forEach(b => {
+        const m = metaEstudio(nuevo, b.operacion)
+        if (m != null) cambio('bh_bloques', 'upsert', { ...b, meta_hora: m })
+        else { cambio('bh_bloques', 'upsert', { ...b, meta_origen: 'manual' }); sinEstudio.push(b.operacion) }
+      })
+      C.closeModal(); pintarTurno()
+      C.toast(sinEstudio.length ? `Código cambiado. Sin estudio en el código nuevo (quedan con meta manual): ${sinEstudio.join(', ')}.` : 'Código cambiado.')
+      return
+    }
     const fila = { id: uid(), turno_id: T.turno.id, codigo: x.dataset.ref, orden: T.hojas.length }
     cambio('bh_hojas', 'upsert', fila)
     hojaActual = fila.id; vistaTurno = 'hojas'
@@ -669,18 +690,20 @@ function modalOperacion(bloqueId) {
   const delCodigo = [...new Set(C.m1.tiemposOf(hoja.codigo).map(r => r.op))]
   const tipo = n => C.m1.tipoOf(n)
   const resto = C.m1.opList().map(o => o.nombre).filter(n => !delCodigo.includes(n))
-  const ya = new Set(T.bloques.filter(x => x.hoja_id === hoja.id).map(x => x.operacion))
-  C.openModal(`<h3>${b ? 'Meta de ' + C.esc(b.operacion) : 'Agregar operación'}</h3>
-    ${b ? '' : `<div class="field"><label>Operación</label><select id="op-sel">
+  // Las operaciones que ya están en esta referencia no se repiten (salvo la que se está editando).
+  const ya = new Set(T.bloques.filter(x => x.hoja_id === hoja.id && (!b || x.id !== b.id)).map(x => x.operacion))
+  C.openModal(`<h3>${b ? 'Editar operación' : 'Agregar operación'}</h3>
+    <div class="field"><label>Operación</label><select id="op-sel">
       ${delCodigo.length ? `<optgroup label="De esta referencia (con meta de Métodos y Tiempos)">${delCodigo.sort((x, y) => (tipo(x) === 'Costura' ? 0 : 1) - (tipo(y) === 'Costura' ? 0 : 1)).map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>` : ''}
       <optgroup label="Otras operaciones (meta manual)">${resto.map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>
-    </select></div>`}
+    </select></div>
+    ${b ? '<div class="hint" style="color:var(--muted);font-size:12px;margin:-4px 0 10px">Si cambias la operación, las personas y sus horas registradas pasan a la nueva.</div>' : ''}
     <div class="field"><label>Meta (obligatoria)</label><div class="bh-chips" id="op-tipo"></div></div>
     <div class="field" id="op-metabox"><label>Meta por hora (sacos)</label><input type="number" id="op-meta" min="0" step="0.1" inputmode="decimal" placeholder="Ej: 25"></div>
     <div class="hint" id="op-hint" style="color:var(--muted);font-size:12.5px"></div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="op-ok">${b ? 'Guardar' : 'Agregar'}</button></div>`)
   const sel = document.getElementById('op-sel'), meta = document.getElementById('op-meta'), hint = document.getElementById('op-hint')
-  const op = () => b ? b.operacion : sel.value
+  const op = () => sel.value
   // Revisión y patinador pueden calificarse con la meta del turno.
   const admiteTurno = n => /revisi|patin/i.test(n || '')
   let tipoMeta = b ? b.meta_origen : null
@@ -702,7 +725,9 @@ function modalOperacion(bloqueId) {
       : m != null ? 'Meta escrita a mano: vale solo para este turno.' : 'Esta operación no tiene tiempo estudiado para esta referencia: escribe la meta (vale solo para este turno).'
   }
   document.getElementById('op-tipo').addEventListener('click', e => { const x = e.target.closest('[data-t]'); if (!x) return; tipoMeta = x.dataset.t; refrescar(false); if (tipoMeta === 'manual') meta.focus() })
-  if (sel) { const primera = [...sel.options].find(o => !o.disabled); if (primera) sel.value = primera.value; sel.addEventListener('change', () => refrescar(true)) }
+  if (b) sel.value = b.operacion
+  else { const primera = [...sel.options].find(o => !o.disabled); if (primera) sel.value = primera.value }
+  sel.addEventListener('change', () => refrescar(true))
   refrescar(false)
   document.getElementById('op-ok').addEventListener('click', () => {
     const nombre = op(); if (!nombre) { C.toast('Elige la operación.'); return }
@@ -713,7 +738,7 @@ function modalOperacion(bloqueId) {
       if (!mv || mv <= 0) { C.toast('Escribe la meta por hora: sin meta no se puede medir.'); meta.focus(); return }
     } else if (!T.turno.meta_turno) { C.toast('Primero escribe la meta del turno (arriba, en ✎).'); return }
     const origen = tipoMeta
-    if (b) cambio('bh_bloques', 'upsert', { ...b, meta_hora: mv, meta_origen: origen })
+    if (b) cambio('bh_bloques', 'upsert', { ...b, operacion: nombre, meta_hora: mv, meta_origen: origen })
     else {
       const fila = { id: uid(), turno_id: T.turno.id, hoja_id: hoja.id, operacion: nombre, meta_hora: mv, meta_origen: origen, orden: T.bloques.filter(x => x.hoja_id === hoja.id).length }
       cambio('bh_bloques', 'upsert', fila)
@@ -770,6 +795,92 @@ function modalPersonas(bloqueId) {
     cambio('bh_asignaciones', 'upsert', { id: uid(), turno_id: T.turno.id, bloque_id: b.id, cedula: ced, orden: T.asig.filter(a => a.bloque_id === b.id).length })
     pintarTurno()
   }, linea))
+}
+
+// Editar una persona dentro de una operación: cambiarla por otra (sus horas
+// registradas pasan a la nueva), ajustar su ponderación o quitarla.
+function modalEditarPersona(asigId) {
+  const a = T.asig.find(x => x.id === asigId); if (!a) return
+  const b = T.bloques.find(x => x.id === a.bloque_id)
+  const ocupados = new Set(T.asig.filter(x => x.bloque_id === b.id && x.id !== a.id).map(x => x.cedula))
+  let elegido = null
+  C.openModal(`<h3>${C.esc(opNombre(a.cedula))} · ${C.esc(b.operacion)}</h3>
+    ${b.meta_origen !== 'turno' ? `<div class="field"><label>Ponderación de la meta</label>
+      <div class="bh-chips" id="ep-f">${[[0.5, '50 %'], [0.75, '75 %'], [0.9, '90 %'], [1, 'Sin ajuste']].map(([v, t]) => `<button type="button" class="bh-chip ${+a.factor === v ? 'on' : ''}" data-f="${v}">${t}</button>`).join('')}</div></div>` : ''}
+    <div class="field"><label>¿Se equivocaron de persona? Cámbiala por otra (se conservan las horas registradas)</label>
+      <input class="search" style="width:100%" type="search" id="ep-q" placeholder="Buscar por nombre o cédula…" autocomplete="off">
+      <div class="hlist" id="ep-res" style="max-height:30vh"></div></div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn ghost danger" id="ep-quitar">Quitar de esta operación</button>
+      <span><button class="btn ghost" data-act="closeModal">Cancelar</button> <button class="btn go" id="ep-ok">Guardar</button></span>
+    </div>`, true)
+  let factor = +a.factor || 1
+  const fbox = document.getElementById('ep-f')
+  if (fbox) fbox.addEventListener('click', e => { const x = e.target.closest('[data-f]'); if (!x) return; factor = +x.dataset.f; fbox.querySelectorAll('.bh-chip').forEach(c => c.classList.toggle('on', +c.dataset.f === factor)) })
+  const draw = q => {
+    const n = q.trim().toLowerCase()
+    if (!n) { document.getElementById('ep-res').innerHTML = '<div class="empty" style="padding:12px">Escribe para buscar.</div>'; return }
+    const lista = CAT.operarios.filter(o => o.activo && o.cedula !== a.cedula && !ocupados.has(o.cedula) && (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)).slice(0, 60)
+    document.getElementById('ep-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegido === o.cedula ? 'on' : ''}" data-ced="${o.cedula}">
+      <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div></td><td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}</td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
+  }
+  draw('')
+  document.getElementById('ep-q').addEventListener('input', e => draw(e.target.value))
+  document.getElementById('ep-res').addEventListener('click', e => {
+    const tr = e.target.closest('[data-ced]'); if (!tr) return
+    elegido = elegido === tr.dataset.ced ? null : tr.dataset.ced
+    draw(document.getElementById('ep-q').value)
+  })
+  document.getElementById('ep-ok').addEventListener('click', () => {
+    cambio('bh_asignaciones', 'upsert', { ...a, cedula: elegido || a.cedula, factor })
+    C.closeModal(); C.toast(elegido ? `Cambiado por ${opNombre(elegido)}.` : 'Guardado.'); pintarTurno()
+  })
+  document.getElementById('ep-quitar').addEventListener('click', () => {
+    confirmar('Quitar persona', `¿Quitar a <b>${C.esc(opNombre(a.cedula))}</b> de esta operación? Se borran sus horas registradas en ella.`, () => cambio('bh_asignaciones', 'delete', { id: a.id }))
+  })
+}
+
+function modalEditarTurno() {
+  const t = T.turno
+  const sups = CAT.supervisores.filter(s => s.activo || s.cedula === t.supervisor_cedula || s.cedula === t.supervisor2_cedula)
+  const opt = sel => `<option value="">—</option>` + sups.map(s => `<option value="${s.cedula}" ${s.cedula === sel ? 'selected' : ''}>${C.esc(nombreCorto(s.nombre))}</option>`).join('')
+  C.openModal(`<h3>Editar turno</h3>
+    <div class="field"><label>Fecha</label><input type="date" id="et-fecha" value="${t.fecha}"></div>
+    <div class="field"><label>Turno</label><select id="et-turno">${CAT.turnos.map(x => `<option value="${x.codigo}" ${x.codigo === t.turno ? 'selected' : ''}>${C.esc(turnoTxt(x.codigo))}</option>`).join('')}</select></div>
+    <div class="field"><label>Línea</label><select id="et-linea">${LINEAS.map(l => `<option value="${l.v}" ${l.v === t.linea ? 'selected' : ''}>${l.t}</option>`).join('')}</select></div>
+    <div class="field"><label>Supervisor</label><select id="et-sup">${opt(t.supervisor_cedula)}</select></div>
+    <div class="field"><label>Segundo supervisor (opcional)</label><select id="et-sup2">${opt(t.supervisor2_cedula)}</select></div>
+    <div class="field"><label>Meta del turno (sacos de la línea)</label><input type="number" id="et-meta" inputmode="numeric" min="1" step="1" value="${t.meta_turno ?? ''}"></div>
+    <div class="hint" id="et-aviso" style="color:var(--warn);font-size:12.5px"></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="et-ok">Guardar</button></div>`)
+  const aviso = document.getElementById('et-aviso')
+  document.getElementById('et-turno').addEventListener('change', e => {
+    aviso.textContent = e.target.value !== t.turno ? 'Ojo: las horas ya registradas se conservan en el mismo orden (la primera hora sigue siendo la primera del turno nuevo).' : ''
+  })
+  document.getElementById('et-ok').addEventListener('click', async () => {
+    const set = {
+      fecha: document.getElementById('et-fecha').value || t.fecha,
+      turno: document.getElementById('et-turno').value, linea: document.getElementById('et-linea').value,
+      supervisor_cedula: document.getElementById('et-sup').value || null,
+      supervisor2_cedula: document.getElementById('et-sup2').value || null,
+      meta_turno: +document.getElementById('et-meta').value || null,
+    }
+    if (!set.supervisor_cedula) { C.toast('Elige el supervisor.'); return }
+    if (!set.meta_turno || set.meta_turno <= 0) { C.toast('Escribe la meta del turno.'); return }
+    // No puede quedar repetido con otro turno de la misma fecha, turno y línea.
+    if (set.fecha !== t.fecha || set.turno !== t.turno || set.linea !== t.linea) {
+      const { data: otro } = await C.supabase.from('bh_turnos').select('id').match({ fecha: set.fecha, turno: set.turno, linea: set.linea }).maybeSingle()
+      if (otro && otro.id !== t.id) { C.toast('Ya existe un turno con esa fecha, turno y línea.'); return }
+    }
+    const horasAntes = horasTurno(t.turno, t.fecha).length, horasDespues = horasTurno(set.turno, set.fecha).length
+    if (horasDespues < horasAntes) {
+      const fuera = [...T.regs.values()].filter(r => r.hora >= horasDespues && horaRegistrada(r)).length
+      if (fuera) { C.toast(`El turno nuevo tiene menos horas y hay ${fuera} registro(s) en las horas que sobran. Bórralos primero.`); return }
+    }
+    cambio('bh_turnos', 'update', { set, match: { id: t.id } })
+    fechaLista = set.fecha
+    C.closeModal(); C.toast('Turno actualizado.'); pintarTurno()
+  })
 }
 
 // Pregunta cómo ponderar la meta de alguien que pasa a otra operación en el mismo turno.
@@ -875,6 +986,9 @@ async function onClick(e) {
     case 'vistaGeneral': vistaTurno = 'general'; return pintarTurno()
     case 'proyeccion': verProyeccion = !verProyeccion; return pintarTurno()
     case 'metaTurno': return modalMetaTurno()
+    case 'editarTurno': return modalEditarTurno()
+    case 'editarHoja': return modalReferencia(id)
+    case 'editarAsig': return modalEditarPersona(id)
     case 'factor': {
       const a = T.asig.find(y => y.id === id); if (!a) return
       const f = await preguntarFactor(a.cedula, T.bloques.find(b => b.id === a.bloque_id), +a.factor)

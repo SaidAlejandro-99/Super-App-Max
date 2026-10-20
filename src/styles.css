@@ -322,3 +322,5 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 .bh-grid tbody td.bh-op > span:first-child{display:inline-block;max-width:calc(100% - 62px);overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
 .bh-grid tbody tr.bh-acum td.bh-op > span:first-child,.bh-grid tbody td.bh-op:only-child > span{max-width:none}
 .bh-x{float:none;vertical-align:middle}
+.bh-nombre{cursor:pointer;text-decoration:underline dotted var(--muted);text-underline-offset:3px}
+.bh-nombre:hover{color:var(--green-soft)}
