@@ -324,3 +324,10 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 .bh-x{float:none;vertical-align:middle}
 .bh-nombre{cursor:pointer;text-decoration:underline dotted var(--muted);text-underline-offset:3px}
 .bh-nombre:hover{color:var(--green-soft)}
+/* Botones de meta por polivalencia: la meta en grande, el porcentaje en pequeño */
+.bh-fact .bh-chip{display:flex;flex-direction:column;align-items:center;line-height:1.15;padding:8px 12px;min-width:78px}
+.bh-fact .bh-chip b{font-family:"IBM Plex Mono",monospace;font-size:16px}
+.bh-fact .bh-chip small{font-size:10.5px;font-weight:600;opacity:.8}
+.bh-mapa .bh-gcel .bh-u{font-size:14px}
+/* Buscador dentro de un campo de formulario: sin estirarse en alto */
+.field .search{flex:none}
