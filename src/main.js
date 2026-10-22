@@ -6,6 +6,7 @@
 import { supabase } from './supabaseClient.js'
 import * as bihorario from './bihorario.js'
 import * as personal from './personal.js'
+import * as marcador from './marcador.js'
 
 /* ---------- estado ---------- */
 const D = {
@@ -745,12 +746,15 @@ const MODULOS = {
   m1: { t: 'Tiempos y Movimientos', s: 'Planta Super Sacos · por código Dynamics', el: 'mod-m1' },
   bh: { t: 'Bi-horario', s: 'Producción por hora · Planta Super Sacos', el: 'mod-bh', mod: bihorario },
   personal: { t: 'Personal', s: 'Operarios y supervisores · Planta Super Sacos', el: 'mod-personal', mod: personal },
+  mm: { t: 'Mi Marcador', s: 'Eficiencia de los operarios · Planta Super Sacos', el: 'mod-mm', mod: marcador },
 }
 let curMod = 'm1'
 // Lo que los otros módulos necesitan de este archivo.
 const ctx = {
   supabase, toast, openModal, closeModal, esc, fmt, fmt0, downloadBlob,
   role: () => ROLE, perfil: () => PERFIL,
+  // Desde el Bi-horario: abre el Mi Marcador de un operario.
+  verMarcador: ced => { marcador.seleccionar(ced); setModule('mm') },
   m1: { ready: () => dbReady, codigos, codeInfo, tiemposOf, tipoOf, opList, planning: () => D.planning },
 }
 function setModule(m) {
@@ -769,6 +773,7 @@ function setModule(m) {
 document.querySelectorAll('#modsw button').forEach(b => b.addEventListener('click', () => setModule(b.dataset.mod)))
 bihorario.init(ctx)
 personal.init(ctx)
+marcador.init(ctx)
 
 /* ---------- login / roles (Supabase Auth) ---------- */
 function setRole(perfil) {
@@ -785,16 +790,39 @@ async function entrar(session) {
   const { data: perfil } = await supabase.from('perfiles').select('nombre, rol, supervisor_cedula').eq('id', session.user.id).maybeSingle()
   setRole(perfil || { nombre: session.user.email, rol: 'visita' })
   document.getElementById('login').hidden = true
+  document.getElementById('inicio').hidden = true
   let guardado = null; try { guardado = localStorage.getItem('ssmod') } catch (e) {}
   setModule(guardado || (ROLE === 'supervisor' ? 'bh' : 'm1'))
   await loadAll()
 }
+// Sin sesión se muestra el inicio con los dos ingresos; el login de
+// supervisores y administrativos se abre desde ahí.
 function mostrarLogin() {
   ROLE = null; PERFIL = null; document.body.classList.remove('visita')
   const pw = document.getElementById('login-pw'); if (pw) pw.value = ''
   const btn = document.getElementById('login-btn'); btn.disabled = false; btn.textContent = 'Ingresar al panel'
-  document.getElementById('login').hidden = false
+  document.getElementById('login').hidden = true
+  document.getElementById('inicio').hidden = false
 }
+document.getElementById('door-staff').addEventListener('click', () => {
+  document.getElementById('inicio').hidden = true
+  document.getElementById('login').hidden = false
+  document.getElementById('login-email').focus()
+})
+document.getElementById('login-back').addEventListener('click', () => {
+  document.getElementById('login').hidden = true
+  document.getElementById('inicio').hidden = false
+})
+
+// Mi Marcador público: se abre con el botón "Soy operario" o con el enlace …/#marcador.
+document.getElementById('door-op').addEventListener('click', () => { location.hash = 'marcador' })
+function ruta() {
+  if (location.hash === '#marcador') marcador.mostrarPublico()
+  else marcador.ocultarPublico()
+}
+marcador.initPublico(supabase, { volver: () => { history.replaceState(null, '', location.pathname + location.search); ruta() } })
+window.addEventListener('hashchange', ruta)
+ruta()
 document.getElementById('loginForm').addEventListener('submit', async e => {
   e.preventDefault()
   const err = document.getElementById('login-err'); err.hidden = true

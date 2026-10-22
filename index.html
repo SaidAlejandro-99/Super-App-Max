@@ -10,17 +10,67 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   </head>
   <body>
+    <!-- Iconos de línea (sin emojis) -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="i-operario" viewBox="0 0 24 24"><path d="M6.5 9.5a5.5 5.5 0 0111 0"/><path d="M4.5 9.5h15"/><path d="M12 4v2.5"/><path d="M8.5 9.5v.8a3.5 3.5 0 007 0v-.8"/><path d="M5 21v-.5a5 5 0 015-5h4a5 5 0 015 5v.5"/></symbol>
+      <symbol id="i-escudo" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.2-7.5 9.5-4.3-1.3-7.5-4.9-7.5-9.5V6z"/><path d="M8.8 12l2.2 2.2 4.3-4.4"/></symbol>
+      <symbol id="i-sube" viewBox="0 0 26 24"><g fill="currentColor" stroke="none"><path d="M1.5 21H6l2.1-6H3.6z"/><path d="M7.6 21h4.5l3.85-11h-4.5z"/><path d="M13.7 21h4.5l5.95-17h-4.5z"/></g></symbol>
+      <symbol id="i-flecha" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></symbol>
+      <symbol id="i-volver" viewBox="0 0 24 24"><path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/></symbol>
+      <symbol id="i-correo" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3.5 6.5l8.5 6.5 8.5-6.5"/></symbol>
+      <symbol id="i-candado" viewBox="0 0 24 24"><rect x="4.5" y="10.5" width="15" height="10" rx="2"/><path d="M8 10.5V7.5a4 4 0 018 0v3"/></symbol>
+      <symbol id="i-medalla" viewBox="0 0 24 24"><circle cx="12" cy="14.5" r="5.5"/><path d="M8.5 10L6 3h4l2 4.5L14 3h4l-2.5 7"/></symbol>
+      <symbol id="i-reloj" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+      <symbol id="i-actualizar" viewBox="0 0 24 24"><path d="M20 12a8 8 0 11-2.3-5.6"/><path d="M20 4v5h-5"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-estrella" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.8-5.2 2.8 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
+      <symbol id="i-tendencia" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></symbol>
+      <symbol id="i-baja" viewBox="0 0 24 24"><path d="M3 7l6 6 4-4 8 8"/><path d="M15 17h6v-6"/></symbol>
+      <symbol id="i-estable" viewBox="0 0 24 24"><path d="M4 12h16"/><path d="M16 8l4 4-4 4"/></symbol>
+      <symbol id="i-nivel" viewBox="0 0 24 24"><path d="M5 20V14M12 20V9M19 20V4"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="i-buscar" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+    </svg>
+
+    <!-- Inicio: dos ingresos (supervisores/administrativos y operarios) -->
+    <div class="login-screen" id="inicio" hidden>
+      <div class="login-wrap">
+        <img class="login-logo" src="/logo-p.svg" alt="Poliplastics">
+        <div class="login-k">Planta Súper Sacos</div>
+        <div class="login-title">SuperApp Max</div>
+        <div class="login-sub">¿Cómo quieres ingresar?</div>
+        <button class="door" id="door-staff" type="button">
+          <span class="door-go"><svg class="ico"><use href="#i-flecha"/></svg></span>
+          <span class="door-ic"><svg class="ico"><use href="#i-escudo"/></svg></span>
+          <span class="door-t">Supervisores y administrativos</span>
+          <span class="door-p">Ingreso con correo y contraseña al Bi-horario, Métodos y Tiempos y Personal.</span>
+        </button>
+        <button class="door op" id="door-op" type="button">
+          <span class="door-go"><svg class="ico"><use href="#i-flecha"/></svg></span>
+          <span class="door-ic"><svg class="ico"><use href="#i-operario"/></svg></span>
+          <span class="door-t">Soy operario</span>
+          <span class="door-p">Entra a <b>Mi Marcador</b>: visualiza tu avance durante la jornada y consulta tus indicadores y gráficos de desempeño.</span>
+          <span class="door-feat"><span><i class="live-dot"></i>Producción en vivo</span><span>Mi eficiencia</span><span>Mi histórico</span><span>Top 10</span></span>
+        </button>
+        <div class="login-foot">Poliplastics S.A.S. · Barranquilla</div>
+      </div>
+    </div>
+
+    <!-- Mi Marcador público (operarios, sin usuario) -->
+    <div id="mm-public" hidden></div>
+
     <div class="login-screen" id="login" hidden>
       <form class="login-wrap" id="loginForm">
-        <div class="login-mark">⏱</div>
-        <div class="login-k">Planta Super Sacos</div>
-        <div class="login-title">SuperApp Max</div>
-        <div class="login-sub">Métodos y Tiempos · Bi-horario · Poliplastics</div>
+        <button class="login-back" id="login-back" type="button"><svg class="ico"><use href="#i-volver"/></svg> Volver</button>
+        <img class="login-logo sm" src="/logo-p.svg" alt="Poliplastics">
+        <div class="login-k">Ingreso</div>
+        <div class="login-title">Supervisores y administrativos</div>
+        <div class="login-sub">Bi-horario · Métodos y Tiempos · Personal</div>
         <div class="login-card">
           <label for="login-email">Correo</label>
-          <div class="login-inp"><span>✉</span><input type="email" id="login-email" autocomplete="username" placeholder="tu@correo.com" required /></div>
+          <div class="login-inp"><svg class="ico"><use href="#i-correo"/></svg><input type="email" id="login-email" autocomplete="username" placeholder="tu@correo.com" required /></div>
           <label for="login-pw">Contraseña</label>
-          <div class="login-inp"><span>🔒</span><input type="password" id="login-pw" autocomplete="current-password" placeholder="Escribe tu contraseña" required /></div>
+          <div class="login-inp"><svg class="ico"><use href="#i-candado"/></svg><input type="password" id="login-pw" autocomplete="current-password" placeholder="Escribe tu contraseña" required /></div>
           <div class="login-err" id="login-err" hidden></div>
           <div class="login-note" id="login-note" hidden></div>
           <button class="login-btn" id="login-btn" type="submit">Ingresar al panel</button>
@@ -35,6 +85,7 @@
         <button data-mod="m1">Métodos y Tiempos</button>
         <button data-mod="bh">Bi-horario</button>
         <button data-mod="personal">Personal</button>
+        <button data-mod="mm">Mi Marcador</button>
       </div>
       <div class="spacer"></div>
       <span class="tb-role" id="syncchip" hidden></span>
@@ -62,6 +113,7 @@
 
     <div id="mod-bh" class="wrap wide" hidden></div>
     <div id="mod-personal" class="wrap" hidden></div>
+    <div id="mod-mm" class="wrap" hidden></div>
 
     <div class="modal-bg" id="modalBg"><div class="modal" id="modal"></div></div>
     <div class="notice" id="notice"></div>

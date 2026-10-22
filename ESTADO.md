@@ -48,6 +48,14 @@ La fórmula que une todo: **Eficiencia = Producción real (Módulo 2) ÷ Meta (M
   bloques por operación con meta (Módulo 1 o manual), registro por hora con
   tiempos muertos, eficiencia, cuello de botella, bloques que se contraen y
   cierre del turno. Diseño y decisiones en `docs/BIHORARIO.md`.
+- **Módulo 3 — Mi Marcador** (2026-10-22): la app abre con dos ingresos
+  (supervisores/administrativos y "Soy operario"). El operario entra con su
+  cédula y ve su tarjeta: turno en vivo, curva de aprendizaje, habilidades,
+  polivalencia y día a día en calendario. Histórico cargado desde el Excel de
+  bi-horarios (54.315 registros) y niveles 1-3 (solo el admin los cambia, en
+  Personal). Detalle en `docs/MI_MARCADOR.md`.
+- **Bi-horario**: turnos 4 y 5 con 11 casillas (sin la hora de almuerzo) y
+  vista "Eficiencia por persona" que abre el Mi Marcador de cada operario.
 - **Personal**: 239 operarios activos y 6 supervisores cargados desde el Excel
   de programación de Said (sin retirados ni administrativos).
 - **Publicada** en https://superapp-max.netlify.app (Netlify, plan gratis,

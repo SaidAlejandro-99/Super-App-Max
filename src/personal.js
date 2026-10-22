@@ -11,6 +11,15 @@ export function init(ctx) {
   C = ctx
   el = document.getElementById('mod-personal')
   el.addEventListener('click', onClick)
+  // Nivel del operario (1, 2 o 3): solo el admin lo cambia. Se ve en Mi Marcador.
+  el.addEventListener('change', async e => {
+    const s = e.target.closest('.pp-nivel'); if (!s) return
+    const o = OPS.find(x => x.cedula === s.dataset.c), nivel = +s.value
+    const { error } = await C.supabase.from('operarios').update({ nivel, updated_at: new Date().toISOString() }).eq('cedula', s.dataset.c)
+    if (error) { C.toast('No se pudo guardar: ' + error.message); s.value = o.nivel || 1; return }
+    o.nivel = nivel
+    C.toast(`${o.nombre.split(' ').slice(0, 2).join(' ')}: nivel ${nivel}.`)
+  })
 }
 export async function show() {
   el.innerHTML = '<div class="loading">Cargando personal…</div>'
@@ -19,7 +28,7 @@ export async function show() {
 }
 async function cargar() {
   const [o, s] = await Promise.all([
-    C.supabase.from('operarios').select('cedula, nombre, linea, rol, operacion_base, activo').order('nombre').range(0, 4999),
+    C.supabase.from('operarios').select('cedula, nombre, linea, rol, operacion_base, activo, nivel').order('nombre').range(0, 4999),
     C.supabase.from('supervisores').select('*').order('nombre'),
   ])
   if (o.error || s.error) { C.toast('No se pudo cargar el personal.'); return }
@@ -49,7 +58,7 @@ function pintarOperarios() {
     ${esStaff() ? '<button class="btn go right" data-a="nueva">+ Persona</button>' : ''}
   </div>
   <div class="tablebox"><table>
-    <thead><tr><th>Nombre</th><th>Cédula</th><th>Línea</th><th>Operación habitual</th><th>Estado</th><th></th></tr></thead>
+    <thead><tr><th>Nombre</th><th>Cédula</th><th>Línea</th><th>Operación habitual</th><th>Nivel</th><th>Estado</th><th></th></tr></thead>
     <tbody id="pp-tb"></tbody>
   </table></div>
   <div class="count" id="pp-count"></div>`
@@ -64,10 +73,11 @@ function llenarOperarios() {
   document.getElementById('pp-tb').innerHTML = rows.map(o => `<tr>
     <td>${C.esc(o.nombre)}</td><td class="mono">${C.esc(o.cedula)}</td><td>${C.esc(lineaTxt(o.linea))}</td>
     <td class="muted">${C.esc(o.operacion_base || '')}</td>
+    <td>${esAdmin() && o.activo ? `<select class="pp-nivel" data-c="${C.esc(o.cedula)}" aria-label="Nivel">${[1, 2, 3].map(n => `<option value="${n}" ${n === (o.nivel || 1) ? 'selected' : ''}>Nivel ${n}</option>`).join('')}</select>` : `Nivel ${o.nivel || 1}`}</td>
     <td>${o.activo ? '<span class="pill si">Activo</span>' : '<span class="pill no">Retirado</span>'}</td>
     <td class="nowrap">${o.activo && esStaff() ? `<button class="btn sm ghost danger" data-a="retirar" data-c="${C.esc(o.cedula)}">Retirar</button>` : ''}
       ${!o.activo && esAdmin() ? `<button class="btn sm ghost" data-a="reactivar" data-c="${C.esc(o.cedula)}">Reactivar</button>` : ''}</td></tr>`).join('')
-    || '<tr><td colspan="6" class="empty">Sin resultados</td></tr>'
+    || '<tr><td colspan="7" class="empty">Sin resultados</td></tr>'
   document.getElementById('pp-count').textContent = `${rows.length} personas · ${OPS.filter(o => o.activo).length} activas en total`
 }
 

@@ -50,14 +50,24 @@ const hNum = t => +String(t).slice(0, 2)
 
 // Horas del turno: inicio, cantidad de casillas y etiqueta de cada una.
 // La etiqueta es la hora en que termina la casilla, como en la hoja de papel
-// (turno de 6 a 18 → 7, 8, 9 … 6).
-function horasTurno(turno, fecha) {
+// (turno de 6 a 18 → 7, 8, 9 … 6). El índice i es la hora que se guarda en bh_registros.
+function slotsTurno(turno, fecha) {
   const def = CAT.turnos.find(t => t.codigo === turno); if (!def) return []
   const domingo = new Date(fecha + 'T12:00:00').getDay() === 0
   const ini = hNum(domingo && def.inicio_domingo ? def.inicio_domingo : def.inicio)
   const fin = hNum(def.fin)
   const n = ((fin - ini) + 24) % 24 || 24
   return Array.from({ length: n }, (_, i) => { const h = (ini + i + 1) % 24; return { i, label: String(h % 12 || 12), h } })
+}
+// Casillas que se muestran: los turnos de 12 h (4 y 5) no muestran la hora de
+// almuerzo (turnos_def.descanso), salvo que ese turno ya tenga algo registrado ahí.
+function horasTurno(turno, fecha, X = T) {
+  const s = slotsTurno(turno, fecha)
+  const def = CAT.turnos.find(t => t.codigo === turno)
+  const d = def && def.descanso != null ? s.find(h => h.h === +def.descanso) : null
+  if (!d) return s
+  const usado = X && X.turno.turno === turno && X.turno.fecha === fecha && [...X.regs.values()].some(r => r.hora === d.i && horaRegistrada(r))
+  return usado ? s : s.filter(h => h !== d)
 }
 function turnoTxt(codigo) {
   const d = CAT.turnos.find(t => t.codigo === codigo); if (!d) return codigo
@@ -243,7 +253,7 @@ function calificacionTurno(X) {
 function resumenAsig(a, bloque, X = T) {
   let total = 0, disp = 0
   const acum = []
-  horasTurno(X.turno.turno, X.turno.fecha).forEach(({ i }) => {
+  slotsTurno(X.turno.turno, X.turno.fecha).forEach(({ i }) => {
     const r = regX(X, a.id, i)
     if (horaRegistrada(r)) { total += +r.unidades || 0; disp += minutosDisponibles(r) }
     acum.push(total)
@@ -254,7 +264,7 @@ function resumenAsig(a, bloque, X = T) {
   return { total, disp, acum, esperado, ef: esperado ? total / esperado : null }
 }
 function resumenBloque(b, X = T) {
-  const horas = horasTurno(X.turno.turno, X.turno.fecha)
+  const horas = slotsTurno(X.turno.turno, X.turno.fecha)
   const asig = X.asig.filter(a => a.bloque_id === b.id).sort((p, q) => p.orden - q.orden)
   const porHora = horas.map(({ i }) => asig.reduce((s, a) => s + (+(regX(X, a.id, i) || {}).unidades || 0), 0))
   let acc = 0; const acum = porHora.map(v => (acc += v))
@@ -267,15 +277,17 @@ function resumenBloque(b, X = T) {
 // Todo el turno agrupado por operación, sin importar la referencia (vista
 // general, tarjetas de la lista y proyección al cierre).
 function resumenOperaciones(X = T) {
-  const horas = horasTurno(X.turno.turno, X.turno.fecha)
+  // Los arreglos por hora van por índice i (todas las casillas); "horas" son las que se muestran.
+  const slots = slotsTurno(X.turno.turno, X.turno.fecha)
+  const horas = horasTurno(X.turno.turno, X.turno.fecha, X)
   const ordenHoja = new Map(X.hojas.map((h, i) => [h.id, h.orden ?? i]))
   const bloques = [...X.bloques].sort((a, b) => (ordenHoja.get(a.hoja_id) - ordenHoja.get(b.hoja_id)) || (a.orden - b.orden))
   const ops = new Map()
   bloques.forEach(b => {
     const r = resumenBloque(b, X)
     let o = ops.get(b.operacion)
-    if (!o) { o = { operacion: b.operacion, porHora: horas.map(() => 0), hojasHora: horas.map(() => new Set()), personas: new Set(), esperado: 0, conMeta: false, turnoMeta: false }; ops.set(b.operacion, o) }
-    horas.forEach(({ i }) => { if (r.porHora[i]) { o.porHora[i] += r.porHora[i]; o.hojasHora[i].add(b.hoja_id) } })
+    if (!o) { o = { operacion: b.operacion, porHora: slots.map(() => 0), hojasHora: slots.map(() => new Set()), personas: new Set(), esperado: 0, conMeta: false, turnoMeta: false }; ops.set(b.operacion, o) }
+    slots.forEach(({ i }) => { if (r.porHora[i]) { o.porHora[i] += r.porHora[i]; o.hojasHora[i].add(b.hoja_id) } })
     r.asig.forEach(a => o.personas.add(a.cedula))
     if (b.meta_origen === 'turno') o.turnoMeta = true
     else if (r.esperado) { o.esperado += r.esperado; o.conMeta = true }
@@ -287,7 +299,7 @@ function resumenOperaciones(X = T) {
     // Proyección: promedio de las horas que sí tuvieron producción en esta operación,
     // por las horas que faltan del turno.
     const prom = conDato.length ? acc / conDato.length : 0
-    const proyeccion = ultima >= 0 ? Math.round(acc + prom * (horas.length - 1 - ultima)) : null
+    const proyeccion = ultima >= 0 ? Math.round(acc + prom * horas.filter(h => h.i > ultima).length) : null
     const ef = o.turnoMeta ? calificacionTurno(X) : (o.conMeta && o.esperado ? acc / o.esperado : null)
     return { ...o, acum, total: acc, ultima, prom, proyeccion, ef }
   })
@@ -337,7 +349,7 @@ function resumenTarjeta(X) {
   const { horas, lista } = resumenOperaciones(X)
   const claves = clavesDe(X.turno.linea)
   const mostrar = X.turno.linea === 'ALTERNAS' ? [...lista].sort((a, b) => b.total - a.total).slice(0, 3) : lista.filter(o => claves.includes(o.operacion))
-  const hasta = o => o.ultima >= 0 ? `hasta las ${horas[o.ultima].label}` : 'sin registros'
+  const hasta = o => o.ultima >= 0 ? `hasta las ${(horas.find(h => h.i === o.ultima) || slotsTurno(X.turno.turno, X.turno.fecha)[o.ultima]).label}` : 'sin registros'
   const personas = new Set(X.asig.map(a => a.cedula)).size
   let esp = 0, tot = 0
   lista.forEach(o => { if (!o.turnoMeta && o.conMeta) { esp += o.esperado; tot += o.total } })
@@ -460,22 +472,25 @@ function pintarTurno() {
   </div>
   <div class="bh-hojas">
     ${T.hojas.length ? `<button class="bh-hoja vista ${vistaTurno === 'general' ? 'on' : ''}" data-a="vistaGeneral"><b>▦ Vista general</b><span>Todo el turno por operación</span></button>` : ''}
+    ${T.asig.length ? `<button class="bh-hoja vista ${vistaTurno === 'personas' ? 'on' : ''}" data-a="vistaPersonas"><b>% Eficiencia por persona</b><span>Cómo va cada operario</span></button>` : ''}
     ${T.hojas.map((h, i) => { const c = C.m1.codeInfo(h.codigo); return `<button class="bh-hoja ${vistaTurno === 'hojas' && h.id === hojaActual ? 'on' : ''}" data-a="hoja" data-id="${h.id}" style="border-left:4px solid ${COLORES[i % COLORES.length]}"><b class="mono">${C.esc(h.codigo)}</b><span>${C.esc(c.cliente || '')}</span></button>` }).join('')}
     ${ed ? '<button class="bh-hoja add" data-a="referencia">+ Referencia</button>' : ''}
   </div>
-  ${vistaTurno === 'general' && T.hojas.length ? pintarGeneral()
+  ${vistaTurno === 'personas' && T.asig.length ? pintarPersonas()
+    : vistaTurno === 'general' && T.hojas.length ? pintarGeneral()
     : hoja ? pintarHoja(hoja, ed) : `<div class="empty">${ed ? 'Agrega la referencia (código del saco) que se va a trabajar.' : 'Este turno no tiene referencias.'}</div>`}
   ${t.observaciones ? `<div class="section"><h2>Observaciones</h2><div style="white-space:pre-wrap">${C.esc(t.observaciones)}</div></div>` : ''}`
 }
 
 /* ---------- mapa: una sola tabla por operación (vista general y hoja contraída) ---------- */
 // Promedio de las horas con producción y proyección al cierre del turno.
-function proyectar(porHora) {
+function proyectar(porHora, horas) {
   const conDato = porHora.map((v, i) => v ? i : -1).filter(i => i >= 0)
   const total = porHora.reduce((s, v) => s + v, 0)
   if (!conDato.length) return { prom: 0, proyeccion: null }
   const prom = total / conDato.length
-  return { prom, proyeccion: Math.round(total + prom * (porHora.length - 1 - conDato[conDato.length - 1])) }
+  const ultima = conDato[conDato.length - 1]
+  return { prom, proyeccion: Math.round(total + prom * horas.filter(h => h.i > ultima).length) }
 }
 // Fondo de la casilla con el color de la referencia; si en esa hora hubo dos, se parte en franjas.
 function fondoCelda(ids, colorHoja) {
@@ -491,7 +506,7 @@ function tablaMapa(filas, horas, colorHoja, conMeta) {
   <div class="section bh-bloque bh-mapa" style="padding:10px">
     <div class="tablebox bh-grid"><table>
       <thead><tr><th class="bh-op">Operación</th>${conMeta ? '<th class="num">Meta/h</th>' : ''}${horas.map(h => `<th class="num">${h.label}</th>`).join('')}<th class="num">Total</th><th class="num">Pers.</th><th class="num">Efic.</th>${verProyeccion ? '<th class="num">Proyección</th>' : ''}</tr></thead>
-      <tbody>${filas.map(o => { const p = proyectar(o.porHora); return `<tr class="${o.cuello ? 'bh-fila-cuello' : ''}">
+      <tbody>${filas.map(o => { const p = proyectar(o.porHora, horas); return `<tr class="${o.cuello ? 'bh-fila-cuello' : ''}">
         <td class="bh-op">${o.bloqueId ? `<span class="bh-nombre" data-a="verBloque" data-id="${o.bloqueId}" title="Ver el detalle de esta operación">${C.esc(o.operacion)}</span>` : `<span>${C.esc(o.operacion)}</span>`}</td>
         ${conMeta ? `<td class="num muted">${C.esc(o.meta)}</td>` : ''}
         ${horas.map(h => `<td class="num bh-gcel" style="${fondoCelda(o.hojasHora[h.i], colorHoja)}">${o.porHora[h.i] ? `<span class="bh-u">${C.fmt0(o.porHora[h.i])}</span><span class="bh-ac">${C.fmt0(o.acum[h.i])}</span>` : ''}</td>`).join('')}
@@ -520,6 +535,53 @@ function pintarGeneral() {
   </div>
   ${cuello ? `<div class="banner bh-cuello">Cuello de botella del turno: <b>${C.esc(cuello.operacion)}</b> con ${C.fmt0(cuello.total)} sacos.</div>` : ''}
   ${tablaMapa(filas, horas, colorHoja, false)}`
+}
+
+/* ---------- vista de eficiencia por persona ---------- */
+// Une las operaciones de cada operario en el turno. El nombre abre su Mi Marcador.
+function pintarPersonas() {
+  const slots = slotsTurno(T.turno.turno, T.turno.fecha)
+  const mapa = new Map()
+  T.asig.forEach(a => {
+    const b = T.bloques.find(x => x.id === a.bloque_id); if (!b) return
+    const r = resumenAsig(a, b)
+    let p = mapa.get(a.cedula)
+    if (!p) { p = { cedula: a.cedula, ops: [], total: 0, esperado: 0, horas: 0, tm: 0, soloTurno: true }; mapa.set(a.cedula, p) }
+    slots.forEach(h => {
+      const g = reg(a.id, h.i); if (!horaRegistrada(g)) return
+      p.horas++
+      const c = g.tm_causa && causa(g.tm_causa); if (c && c.tipo !== 'tardanza') p.tm += +g.tm_minutos || 0
+    })
+    p.ops.push({ operacion: b.operacion, ef: r.ef, total: r.total, turno: b.meta_origen === 'turno' })
+    p.total += r.total
+    if (r.esperado) { p.esperado += r.esperado; p.soloTurno = false }
+  })
+  const lista = [...mapa.values()].map(p => ({ ...p, ef: p.esperado ? p.total / p.esperado : (p.soloTurno ? calificacionTurno(T) : null) }))
+    .sort((x, y) => (y.ef ?? -1) - (x.ef ?? -1))
+  const conEf = lista.filter(p => p.esperado)
+  const efLinea = conEf.length ? conEf.reduce((s, p) => s + p.total, 0) / conEf.reduce((s, p) => s + p.esperado, 0) : null
+  const enBono = lista.filter(p => p.ef != null && p.ef >= 0.9).length
+  return `
+  <div class="bh-hoja-bar"><div class="hint" style="margin:0">Toca el nombre para abrir su <b>Mi Marcador</b>. Eficiencia con lo registrado hasta ahora.</div></div>
+  <div class="grid kpis" style="margin-bottom:12px">
+    <div class="kpi"><div class="label">Personas</div><div class="value">${lista.length}</div></div>
+    <div class="kpi"><div class="label">Eficiencia del grupo</div><div class="value ${efClase(efLinea)}">${pct(efLinea)}</div></div>
+    <div class="kpi"><div class="label">En 90 % o más</div><div class="value">${enBono}<small style="font-size:14px;color:var(--muted)"> / ${lista.length}</small></div></div>
+  </div>
+  <div class="section" style="padding:10px"><div class="tablebox"><table class="bh-pers">
+    <thead><tr><th>#</th><th>Operario</th><th>Operaciones del turno</th><th class="num">Horas</th><th class="num">Producido</th><th class="num">Esperado</th><th class="num">TM</th><th>Eficiencia</th></tr></thead>
+    <tbody>${lista.map((p, k) => `<tr>
+      <td class="muted">${k + 1}</td>
+      <td><span class="bh-nombre" data-a="verMarcador" data-c="${C.esc(p.cedula)}" title="Abrir Mi Marcador">${C.esc(opNombre(p.cedula))}</span></td>
+      <td>${p.ops.map(o => `<span class="bh-pop">${C.esc(o.operacion)} <b class="${efClase(o.ef)}">${o.turno && o.ef == null ? 'al cierre' : pct(o.ef)}</b></span>`).join('')}</td>
+      <td class="num">${p.horas}</td>
+      <td class="num"><b>${C.fmt0(p.total)}</b></td>
+      <td class="num muted">${p.esperado ? C.fmt0(p.esperado) : '—'}</td>
+      <td class="num muted">${p.tm ? p.tm + '′' : ''}</td>
+      <td><div class="bh-efbar"><i class="${efClase(p.ef)}" style="width:${Math.min(100, Math.round((p.ef || 0) * 100))}%"></i><b class="${efClase(p.ef)}">${p.ef == null && p.soloTurno ? 'al cierre' : pct(p.ef)}</b></div></td>
+    </tr>`).join('')}</tbody>
+  </table></div>
+  <div class="count">Producido frente a lo esperado según la meta de cada operación (con el ajuste de polivalencia) y el tiempo disponible. TM: minutos de tiempo muerto que descuentan.</div></div>`
 }
 
 function pintarHoja(hoja, ed) {
@@ -612,7 +674,7 @@ function celda(a, h, acum, ed) {
 function modalCelda(asigId, h) {
   const a = T.asig.find(x => x.id === asigId); if (!a) return
   const b = T.bloques.find(x => x.id === a.bloque_id)
-  const horas = horasTurno(T.turno.turno, T.turno.fecha)
+  const horas = slotsTurno(T.turno.turno, T.turno.fecha)
   const r = reg(asigId, h) || {}
   let tmSel = r.tm_causa || '', minSel = r.tm_minutos || 60
   const rapidas = CAT.causas.filter(c => c.rapida)
@@ -906,7 +968,7 @@ function modalEditarTurno() {
       const { data: otro } = await C.supabase.from('bh_turnos').select('id').match({ fecha: set.fecha, turno: set.turno, linea: set.linea }).maybeSingle()
       if (otro && otro.id !== t.id) { C.toast('Ya existe un turno con esa fecha, turno y línea.'); return }
     }
-    const horasAntes = horasTurno(t.turno, t.fecha).length, horasDespues = horasTurno(set.turno, set.fecha).length
+    const horasAntes = slotsTurno(t.turno, t.fecha).length, horasDespues = slotsTurno(set.turno, set.fecha).length
     if (horasDespues < horasAntes) {
       const fuera = [...T.regs.values()].filter(r => r.hora >= horasDespues && horaRegistrada(r)).length
       if (fuera) { C.toast(`El turno nuevo tiene menos horas y hay ${fuera} registro(s) en las horas que sobran. Bórralos primero.`); return }
@@ -932,7 +994,7 @@ function preguntarFactor(ced, bloque, actual) {
   return new Promise(resolve => {
     const otras = T.asig.filter(a => a.cedula === ced && a.bloque_id !== bloque.id).map(a => {
       const bl = T.bloques.find(x => x.id === a.bloque_id)
-      const horasReg = horasTurno(T.turno.turno, T.turno.fecha).filter(h => horaRegistrada(reg(a.id, h.i))).length
+      const horasReg = slotsTurno(T.turno.turno, T.turno.fecha).filter(h => horaRegistrada(reg(a.id, h.i))).length
       return `${bl ? bl.operacion : ''}${horasReg ? ` (${horasReg} h)` : ''}`
     })
     C.openModal(`<h3>${C.esc(opNombre(ced))} cambia de operación</h3>
@@ -976,7 +1038,7 @@ export function modalPersonaNueva(alGuardar, lineaDef = '') {
 /* ---------- terminar ---------- */
 function modalTerminar() {
   const t = T.turno
-  const sinRegistro = T.asig.filter(a => !horasTurno(t.turno, t.fecha).some(h => horaRegistrada(reg(a.id, h.i)))).length
+  const sinRegistro = T.asig.filter(a => !slotsTurno(t.turno, t.fecha).some(h => horaRegistrada(reg(a.id, h.i)))).length
   C.openModal(`<h3>${t.estado === 'abierto' ? 'Terminar Bi-horario' : 'Cierre del turno'}</h3>
     ${t.estado === 'abierto' ? `<div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:10px">Al terminar, el turno queda cerrado. Podrás corregirlo hasta 2 días después.${sinRegistro ? ` <b>Ojo: ${sinRegistro} persona(s) no tienen ninguna hora registrada.</b>` : ''}</div>` : ''}
     <div class="field"><label>Unidades fabricadas en el turno (sacos completos de cada código)</label>
@@ -1026,6 +1088,8 @@ async function onClick(e) {
     case 'volver': return pintarLista()
     case 'hoja': hojaActual = id; vistaTurno = 'hojas'; return pintarTurno()
     case 'vistaGeneral': vistaTurno = 'general'; return pintarTurno()
+    case 'vistaPersonas': vistaTurno = 'personas'; return pintarTurno()
+    case 'verMarcador': return C.verMarcador(x.dataset.c)
     case 'proyeccion': verProyeccion = !verProyeccion; return pintarTurno()
     case 'toggleMapa': hojasMapa.has(hojaActual) ? hojasMapa.delete(hojaActual) : hojasMapa.add(hojaActual); guardarMapa(); return pintarTurno()
     case 'verBloque': {
