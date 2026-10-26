@@ -131,6 +131,20 @@ if (perdidas) {
   ], 'Suma de todas las personas, líneas y turnos del periodo. El tiempo es por persona.')
   ;[...porOp.values()].sort((a, b) => b.unidades - a.unidades).forEach(o => ro.addRow(o))
   filaTotal(ro, 1, { 2: perdidas.reduce((s, p) => s + +p.tm_minutos, 0), 3: totalU })
+
+  const porMot = new Map()
+  perdidas.forEach(p => { const o = porMot.get(p.codigo) || { codigo: p.codigo, descripcion: p.descripcion, minutos: 0, unidades: 0 }; o.minutos += +p.tm_minutos; o.unidades += +p.unidades_perdidas; porMot.set(p.codigo, o) })
+  const rm = wb.addWorksheet('Unidades por motivo')
+  encabezado(rm, [
+    { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
+    { header: 'Descripción tiempo muerto', key: 'descripcion', width: 60 },
+    { header: 'Tiempo parado (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
+    { header: 'Unidades dejadas de fabricar', key: 'unidades', width: 16, style: { numFmt: '#,##0' } },
+    { header: '% de las unidades', key: 'pct', width: 12, style: { numFmt: '0.0%' } },
+  ], 'Unidades dejadas de fabricar agrupadas por motivo del tiempo muerto. El tiempo es por persona.')
+  ;[...porMot.values()].sort((a, b) => b.unidades - a.unidades).forEach(o => rm.addRow({ ...o, pct: totalU ? o.unidades / totalU : 0 }))
+  rm.getColumn('descripcion').alignment = { wrapText: true, vertical: 'top' }
+  filaTotal(rm, 2, { 3: perdidas.reduce((s, p) => s + +p.tm_minutos, 0), 4: totalU, 5: totalU ? 1 : 0 })
 }
 
 await wb.xlsx.writeFile(salida)

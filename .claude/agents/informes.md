@@ -118,18 +118,19 @@ Pasos:
      texto. Saca de ahí el arreglo con `node` (busca `[{"datos":`), sin copiarlo a mano.
 4. Genera el Excel desde la carpeta del proyecto:
    `node scripts/informes/tiempos-muertos.mjs "<tm.json>" "informes/Tiempos muertos DESDE a HASTA.xlsx" DESDE HASTA "<perdidas.json>"`
-   - El Excel trae cinco hojas:
+   - El Excel trae seis hojas:
      1. el detalle en el formato pedido;
      2. el resumen por causa;
      3. el resumen por línea;
      4. las unidades dejadas de fabricar por persona y operación;
-     5. el resumen por operación.
+     5. el resumen por operación;
+     6. las unidades dejadas de fabricar por motivo.
 5. Responde con:
    - la ruta del archivo;
    - el total de minutos y horas;
    - las 3 causas principales con su %;
    - la línea con más tiempo muerto;
-   - las 3 operaciones con más unidades dejadas de fabricar;
+   - las 3 operaciones y los 3 motivos con más unidades dejadas de fabricar;
    - cualquier dato raro (por ejemplo, un turno con más minutos de parada que horas de turno).
    - Usa como periodo el de los datos reales: el Bi-horario empieza el 16-oct-2026.
 
