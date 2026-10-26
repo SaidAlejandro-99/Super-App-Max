@@ -109,7 +109,7 @@ if (perdidas) {
     { header: 'Operario', key: 'nombre', width: 22 },
     { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
     { header: 'Descripción tiempo muerto', key: 'descripcion', width: 40 },
-    { header: 'Minutos parados (persona)', key: 'tm_minutos', width: 13, style: { numFmt: '#,##0' } },
+    { header: 'Minutos que paró esta persona', key: 'tm_minutos', width: 14, style: { numFmt: '#,##0' } },
     { header: 'Ritmo real (u/h)', key: 'ritmo_real', width: 13, style: { numFmt: '#,##0.0' } },
     { header: 'Meta (u/h)', key: 'meta', width: 11, style: { numFmt: '#,##0.0' } },
     { header: 'Unidades dejadas de fabricar', key: 'unidades_perdidas', width: 16, style: { numFmt: '#,##0' } },
@@ -119,32 +119,36 @@ if (perdidas) {
   up.getColumn('descripcion').alignment = { wrapText: true, vertical: 'top' }
   if (perdidas.length) up.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + perdidas.length, column: 11 } }
   totalU = perdidas.reduce((s, p) => s + +p.unidades_perdidas, 0)
-  filaTotal(up, 7, { 8: perdidas.reduce((s, p) => s + +p.tm_minutos, 0), 11: totalU })
+  // El total de minutos no se suma aquí: cada fila es el tiempo de una persona.
+  // El tiempo muerto total es el de la línea (hoja 1).
+  filaTotal(up, 7, { 11: totalU })
 
   const porOp = new Map()
-  perdidas.forEach(p => { const o = porOp.get(p.operacion) || { operacion: p.operacion, minutos: 0, unidades: 0 }; o.minutos += +p.tm_minutos; o.unidades += +p.unidades_perdidas; porOp.set(p.operacion, o) })
+  perdidas.forEach(p => { const o = porOp.get(p.operacion) || { operacion: p.operacion, unidades: 0 }; o.unidades += +p.unidades_perdidas; porOp.set(p.operacion, o) })
   const ro = wb.addWorksheet('Resumen por operación')
   encabezado(ro, [
     { header: 'Operación', key: 'operacion', width: 24 },
-    { header: 'Minutos-persona parados', key: 'minutos', width: 15, style: { numFmt: '#,##0' } },
     { header: 'Unidades dejadas de fabricar', key: 'unidades', width: 16, style: { numFmt: '#,##0' } },
-  ], 'Suma de todas las personas, líneas y turnos del periodo. Minutos-persona: se suma el tiempo parado de cada persona (60 min con 3 personas = 180).')
-  ;[...porOp.values()].sort((a, b) => b.unidades - a.unidades).forEach(o => ro.addRow(o))
-  filaTotal(ro, 1, { 2: perdidas.reduce((s, p) => s + +p.tm_minutos, 0), 3: totalU })
+    { header: '% de las unidades', key: 'pct', width: 12, style: { numFmt: '0.0%' } },
+  ], 'Unidades de cada operación que no se hicieron por tiempos muertos, en todo el periodo.')
+  ;[...porOp.values()].sort((a, b) => b.unidades - a.unidades).forEach(o => ro.addRow({ ...o, pct: totalU ? o.unidades / totalU : 0 }))
+  filaTotal(ro, 1, { 2: totalU, 3: totalU ? 1 : 0 })
 
+  // Por motivo: el tiempo es el de la línea (igual que en la hoja 2) y las unidades son las de todas las personas.
   const porMot = new Map()
-  perdidas.forEach(p => { const o = porMot.get(p.codigo) || { codigo: p.codigo, descripcion: p.descripcion, minutos: 0, unidades: 0 }; o.minutos += +p.tm_minutos; o.unidades += +p.unidades_perdidas; porMot.set(p.codigo, o) })
+  filas.forEach(f => { const o = porMot.get(f.codigo) || { codigo: f.codigo, descripcion: f.descripcion, minutos: 0, unidades: 0 }; o.minutos += +f.minutos; porMot.set(f.codigo, o) })
+  perdidas.forEach(p => { const o = porMot.get(p.codigo) || { codigo: p.codigo, descripcion: p.descripcion, minutos: 0, unidades: 0 }; o.unidades += +p.unidades_perdidas; porMot.set(p.codigo, o) })
   const rm = wb.addWorksheet('Unidades por motivo')
   encabezado(rm, [
     { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
     { header: 'Descripción tiempo muerto', key: 'descripcion', width: 60 },
-    { header: 'Minutos-persona parados', key: 'minutos', width: 15, style: { numFmt: '#,##0' } },
+    { header: 'Tiempo de línea (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
     { header: 'Unidades dejadas de fabricar', key: 'unidades', width: 16, style: { numFmt: '#,##0' } },
     { header: '% de las unidades', key: 'pct', width: 12, style: { numFmt: '0.0%' } },
-  ], 'Unidades dejadas de fabricar agrupadas por motivo del tiempo muerto. Minutos-persona: se suma el tiempo parado de cada persona (60 min con 3 personas = 180).')
+  ], 'El tiempo es el mismo de la hoja "Resumen por causa". Las unidades suman lo que dejó de hacer cada persona que estuvo parada.')
   ;[...porMot.values()].sort((a, b) => b.unidades - a.unidades).forEach(o => rm.addRow({ ...o, pct: totalU ? o.unidades / totalU : 0 }))
   rm.getColumn('descripcion').alignment = { wrapText: true, vertical: 'top' }
-  filaTotal(rm, 2, { 3: perdidas.reduce((s, p) => s + +p.tm_minutos, 0), 4: totalU, 5: totalU ? 1 : 0 })
+  filaTotal(rm, 2, { 3: total, 4: totalU, 5: totalU ? 1 : 0 })
 }
 
 await wb.xlsx.writeFile(salida)
