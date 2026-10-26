@@ -56,7 +56,7 @@ encabezado(ws, [
   { header: 'Línea', key: 'linea', width: 16 },
   { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
   { header: 'Descripción tiempo muerto', key: 'descripcion', width: 60 },
-  { header: 'Tiempo (min)', key: 'minutos', width: 13, style: { numFmt: '#,##0' } },
+  { header: 'Tiempo de línea (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
 ], 'Fuente: Bi-horario de SuperApp Max. Tiempo = minutos de parada de la línea (en cada hora se toma el mayor tiempo registrado). Solo causas de pérdida; no incluye llegadas tarde ni manualidad.')
 filas.forEach(f => ws.addRow({ fecha: fecha(f.fecha), turno: f.turno, linea: LINEAS[f.linea] || f.linea, codigo: f.codigo, descripcion: f.descripcion, minutos: +f.minutos }))
 ws.getColumn('descripcion').alignment = { wrapText: true, vertical: 'top' }
@@ -71,7 +71,7 @@ const rc = wb.addWorksheet('Resumen por causa')
 encabezado(rc, [
   { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
   { header: 'Descripción tiempo muerto', key: 'descripcion', width: 60 },
-  { header: 'Tiempo (min)', key: 'minutos', width: 13, style: { numFmt: '#,##0' } },
+  { header: 'Tiempo de línea (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
   { header: 'Horas', key: 'horas', width: 9, style: { numFmt: '#,##0.0' } },
   { header: '% del total', key: 'pct', width: 11, style: { numFmt: '0.0%' } },
   { header: 'Turnos con la causa', key: 'veces', width: 12 },
@@ -87,7 +87,7 @@ filas.forEach(f => { const k = LINEAS[f.linea] || f.linea; porLinea.set(k, (porL
 const rl = wb.addWorksheet('Resumen por línea')
 encabezado(rl, [
   { header: 'Línea', key: 'linea', width: 18 },
-  { header: 'Tiempo (min)', key: 'minutos', width: 13, style: { numFmt: '#,##0' } },
+  { header: 'Tiempo de línea (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
   { header: 'Horas', key: 'horas', width: 9, style: { numFmt: '#,##0.0' } },
   { header: '% del total', key: 'pct', width: 11, style: { numFmt: '0.0%' } },
 ], 'Suma de todas las causas del periodo.')
@@ -109,7 +109,7 @@ if (perdidas) {
     { header: 'Operario', key: 'nombre', width: 22 },
     { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
     { header: 'Descripción tiempo muerto', key: 'descripcion', width: 40 },
-    { header: 'Tiempo (min)', key: 'tm_minutos', width: 12, style: { numFmt: '#,##0' } },
+    { header: 'Minutos parados (persona)', key: 'tm_minutos', width: 13, style: { numFmt: '#,##0' } },
     { header: 'Ritmo real (u/h)', key: 'ritmo_real', width: 13, style: { numFmt: '#,##0.0' } },
     { header: 'Meta (u/h)', key: 'meta', width: 11, style: { numFmt: '#,##0.0' } },
     { header: 'Unidades dejadas de fabricar', key: 'unidades_perdidas', width: 16, style: { numFmt: '#,##0' } },
@@ -126,9 +126,9 @@ if (perdidas) {
   const ro = wb.addWorksheet('Resumen por operación')
   encabezado(ro, [
     { header: 'Operación', key: 'operacion', width: 24 },
-    { header: 'Tiempo parado (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
+    { header: 'Minutos-persona parados', key: 'minutos', width: 15, style: { numFmt: '#,##0' } },
     { header: 'Unidades dejadas de fabricar', key: 'unidades', width: 16, style: { numFmt: '#,##0' } },
-  ], 'Suma de todas las personas, líneas y turnos del periodo. El tiempo es por persona.')
+  ], 'Suma de todas las personas, líneas y turnos del periodo. Minutos-persona: se suma el tiempo parado de cada persona (60 min con 3 personas = 180).')
   ;[...porOp.values()].sort((a, b) => b.unidades - a.unidades).forEach(o => ro.addRow(o))
   filaTotal(ro, 1, { 2: perdidas.reduce((s, p) => s + +p.tm_minutos, 0), 3: totalU })
 
@@ -138,10 +138,10 @@ if (perdidas) {
   encabezado(rm, [
     { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
     { header: 'Descripción tiempo muerto', key: 'descripcion', width: 60 },
-    { header: 'Tiempo parado (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
+    { header: 'Minutos-persona parados', key: 'minutos', width: 15, style: { numFmt: '#,##0' } },
     { header: 'Unidades dejadas de fabricar', key: 'unidades', width: 16, style: { numFmt: '#,##0' } },
     { header: '% de las unidades', key: 'pct', width: 12, style: { numFmt: '0.0%' } },
-  ], 'Unidades dejadas de fabricar agrupadas por motivo del tiempo muerto. El tiempo es por persona.')
+  ], 'Unidades dejadas de fabricar agrupadas por motivo del tiempo muerto. Minutos-persona: se suma el tiempo parado de cada persona (60 min con 3 personas = 180).')
   ;[...porMot.values()].sort((a, b) => b.unidades - a.unidades).forEach(o => rm.addRow({ ...o, pct: totalU ? o.unidades / totalU : 0 }))
   rm.getColumn('descripcion').alignment = { wrapText: true, vertical: 'top' }
   filaTotal(rm, 2, { 3: perdidas.reduce((s, p) => s + +p.tm_minutos, 0), 4: totalU, 5: totalU ? 1 : 0 })
