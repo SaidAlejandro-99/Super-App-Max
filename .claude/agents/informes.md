@@ -76,17 +76,62 @@ Pasos:
      group by b.fecha, b.turno, b.linea, b.tm_causa, c.descripcion, d.orden
    ) x;
    ```
-2. Guarda el arreglo `datos` tal cual en un archivo JSON temporal (fuera de la
-   carpeta del proyecto, por ejemplo en el directorio temporal del sistema).
-3. Genera el Excel desde la carpeta del proyecto:
-   `node scripts/informes/tiempos-muertos.mjs "<datos.json>" "informes/Tiempos muertos DESDE a HASTA.xlsx" DESDE HASTA`
-   - El Excel trae tres hojas: el detalle en el formato pedido, el resumen por causa y el resumen por línea.
-4. Responde con:
+2. **Unidades dejadas de fabricar**, por persona y operación (criterio de Said).
+   - **Unidades = minutos parados ÷ 60 × ritmo real** de esa persona en esa operación.
+     - Ritmo real = lo que produjo en el turno ÷ las horas que tuvo disponibles.
+     - Horas disponibles = 60 min por cada hora registrada, menos el tiempo muerto que descuenta (no la tardanza).
+     - Si no produjo nada, se usa la meta × el factor de polivalencia.
+   - Ejemplo de Said: paró 30 min e iba a 80/h → 0,5 × 80 = 40 unidades dejadas de fabricar.
+   - Son unidades de cada operación (piezas), no sacos terminados. No las sumes como sacos.
+   ```sql
+   with reg as (
+     select g.*, a.cedula, coalesce(a.factor, 1) factor, b.operacion, b.meta_hora, t.fecha, t.turno, t.linea, c.tipo, c.descripcion
+     from bh_registros g
+     join bh_asignaciones a on a.id = g.asignacion_id
+     join bh_bloques b on b.id = a.bloque_id
+     join bh_turnos t on t.id = g.turno_id
+     left join causas_tm c on c.codigo = g.tm_causa
+     where t.fecha between date 'DESDE' and date 'HASTA'
+       and (g.unidades is not null or g.tm_causa is not null)
+   ),
+   ritmo as (
+     select asignacion_id, sum(coalesce(unidades, 0)) unidades,
+       sum(60 - case when tm_causa is not null and tipo <> 'tardanza' then coalesce(tm_minutos, 0) else 0 end) min_disp
+     from reg group by 1
+   ),
+   perd as (
+     select r.fecha, r.turno, d.orden, r.linea, r.operacion, o.nombre, r.tm_causa codigo, r.descripcion, r.tm_minutos,
+       round(case when x.min_disp > 0 and x.unidades > 0 then x.unidades / (x.min_disp / 60.0) end, 1) ritmo_real,
+       round(r.meta_hora * r.factor, 1) meta,
+       round(r.tm_minutos / 60.0 * coalesce(case when x.min_disp > 0 and x.unidades > 0 then x.unidades / (x.min_disp / 60.0) end, r.meta_hora * r.factor, 0))::int unidades_perdidas
+     from reg r join ritmo x on x.asignacion_id = r.asignacion_id
+     join operarios o on o.cedula = r.cedula join turnos_def d on d.codigo = r.turno
+     where r.tipo = 'perdida'
+   )
+   select coalesce(json_agg(json_build_object('fecha', fecha, 'turno', turno, 'linea', linea, 'operacion', operacion, 'nombre', nombre, 'codigo', codigo,
+     'descripcion', descripcion, 'tm_minutos', tm_minutos, 'ritmo_real', ritmo_real, 'meta', meta, 'unidades_perdidas', unidades_perdidas)
+     order by fecha, orden, linea, operacion, nombre), '[]') as datos from perd;
+   ```
+3. Guarda cada arreglo `datos` en un archivo JSON temporal, fuera de la carpeta
+   del proyecto (por ejemplo, en el directorio temporal del sistema).
+   - Si el resultado es muy grande, la herramienta lo guarda en un archivo de
+     texto. Saca de ahí el arreglo con `node` (busca `[{"datos":`), sin copiarlo a mano.
+4. Genera el Excel desde la carpeta del proyecto:
+   `node scripts/informes/tiempos-muertos.mjs "<tm.json>" "informes/Tiempos muertos DESDE a HASTA.xlsx" DESDE HASTA "<perdidas.json>"`
+   - El Excel trae cinco hojas:
+     1. el detalle en el formato pedido;
+     2. el resumen por causa;
+     3. el resumen por línea;
+     4. las unidades dejadas de fabricar por persona y operación;
+     5. el resumen por operación.
+5. Responde con:
    - la ruta del archivo;
    - el total de minutos y horas;
    - las 3 causas principales con su %;
    - la línea con más tiempo muerto;
+   - las 3 operaciones con más unidades dejadas de fabricar;
    - cualquier dato raro (por ejemplo, un turno con más minutos de parada que horas de turno).
+   - Usa como periodo el de los datos reales: el Bi-horario empieza el 16-oct-2026.
 
 ## Informes nuevos
 
