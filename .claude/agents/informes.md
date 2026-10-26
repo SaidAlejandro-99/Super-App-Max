@@ -119,12 +119,14 @@ Pasos:
 4. Genera el Excel desde la carpeta del proyecto:
    `node scripts/informes/tiempos-muertos.mjs "<tm.json>" "informes/Tiempos muertos DESDE a HASTA.xlsx" DESDE HASTA "<perdidas.json>"`
    - El Excel trae seis hojas:
-     1. el detalle en el formato pedido;
+     1. el detalle en el formato pedido, más dos columnas por parada: personas paradas y unidades dejadas de fabricar;
      2. el resumen por causa;
      3. el resumen por línea;
-     4. las unidades dejadas de fabricar por persona y operación;
+     4. el detalle por persona;
      5. el resumen por operación;
      6. las unidades dejadas de fabricar por motivo.
+   - El tiempo muerto total es **siempre el tiempo de línea** (hojas 1, 2, 3 y 6 dan el mismo total).
+     - En el detalle por persona los minutos no se suman, porque varias personas comparten la misma parada.
 5. Responde con:
    - la ruta del archivo;
    - el total de minutos y horas;

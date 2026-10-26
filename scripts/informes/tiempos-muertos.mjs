@@ -48,7 +48,11 @@ function filaTotal(ws, etiquetaCol, valores) {
   r.eachCell(c => { c.font = { bold: true }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: GRIS } } })
 }
 
-// Hoja 1: el formato pedido.
+// Hoja 1: el formato pedido. Si hay datos de unidades, cada fila suma también
+// las personas que pararon y las unidades que dejaron de hacer en esa parada.
+const clave = r => [r.fecha, r.turno, r.linea, r.codigo].join('|')
+const porParada = new Map()
+;(perdidas || []).forEach(p => { const o = porParada.get(clave(p)) || { personas: new Set(), unidades: 0 }; o.personas.add(p.nombre); o.unidades += +p.unidades_perdidas; porParada.set(clave(p), o) })
 const ws = wb.addWorksheet('Tiempos muertos')
 encabezado(ws, [
   { header: 'Fecha', key: 'fecha', width: 12, style: { numFmt: 'dd/mm/yyyy' } },
@@ -57,12 +61,19 @@ encabezado(ws, [
   { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
   { header: 'Descripción tiempo muerto', key: 'descripcion', width: 60 },
   { header: 'Tiempo de línea (min)', key: 'minutos', width: 14, style: { numFmt: '#,##0' } },
-], 'Fuente: Bi-horario de SuperApp Max. Tiempo = minutos de parada de la línea (en cada hora se toma el mayor tiempo registrado). Solo causas de pérdida; no incluye llegadas tarde ni manualidad.')
-filas.forEach(f => ws.addRow({ fecha: fecha(f.fecha), turno: f.turno, linea: LINEAS[f.linea] || f.linea, codigo: f.codigo, descripcion: f.descripcion, minutos: +f.minutos }))
+  ...(perdidas ? [
+    { header: 'Personas paradas', key: 'personas', width: 11, style: { numFmt: '#,##0', alignment: { horizontal: 'center' } } },
+    { header: 'Unidades dejadas de fabricar', key: 'unidades', width: 16, style: { numFmt: '#,##0' } },
+  ] : []),
+], 'Fuente: Bi-horario de SuperApp Max. Tiempo = minutos de parada de la línea (en cada hora se toma el mayor tiempo registrado). Solo causas de pérdida; no incluye llegadas tarde ni manualidad.' +
+  (perdidas ? ' Unidades = lo que dejó de hacer cada persona parada (minutos ÷ 60 × su ritmo real), sumado.' : ''))
+filas.forEach(f => { const pp = porParada.get(clave(f))
+  ws.addRow({ fecha: fecha(f.fecha), turno: f.turno, linea: LINEAS[f.linea] || f.linea, codigo: f.codigo, descripcion: f.descripcion, minutos: +f.minutos,
+    personas: pp ? pp.personas.size : 0, unidades: pp ? pp.unidades : 0 }) })
 ws.getColumn('descripcion').alignment = { wrapText: true, vertical: 'top' }
-if (filas.length) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + filas.length, column: 6 } }
+if (filas.length) ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + filas.length, column: perdidas ? 8 : 6 } }
 const total = filas.reduce((s, f) => s + +f.minutos, 0)
-filaTotal(ws, 5, { 6: total })
+filaTotal(ws, 5, perdidas ? { 6: total, 8: (perdidas || []).reduce((s, p) => s + +p.unidades_perdidas, 0) } : { 6: total })
 
 // Hoja 2: resumen por causa (de mayor a menor).
 const porCausa = new Map()
@@ -100,7 +111,7 @@ filaTotal(rl, 1, { 2: total, 3: total / 60, 4: total ? 1 : 0 })
 // (lo que produjo ÷ el tiempo que tuvo disponible en el turno). Sin ritmo, se usa la meta.
 let totalU = 0
 if (perdidas) {
-  const up = wb.addWorksheet('Unidades por operación')
+  const up = wb.addWorksheet('Detalle por persona')
   encabezado(up, [
     { header: 'Fecha', key: 'fecha', width: 12, style: { numFmt: 'dd/mm/yyyy' } },
     { header: 'Turno', key: 'turno', width: 8, style: { alignment: { horizontal: 'center' } } },
@@ -109,11 +120,11 @@ if (perdidas) {
     { header: 'Operario', key: 'nombre', width: 22 },
     { header: 'Código', key: 'codigo', width: 9, style: { alignment: { horizontal: 'center' } } },
     { header: 'Descripción tiempo muerto', key: 'descripcion', width: 40 },
-    { header: 'Minutos que paró esta persona', key: 'tm_minutos', width: 14, style: { numFmt: '#,##0' } },
+    { header: 'Minutos de esta persona (no sumar)', key: 'tm_minutos', width: 15, style: { numFmt: '#,##0' } },
     { header: 'Ritmo real (u/h)', key: 'ritmo_real', width: 13, style: { numFmt: '#,##0.0' } },
     { header: 'Meta (u/h)', key: 'meta', width: 11, style: { numFmt: '#,##0.0' } },
     { header: 'Unidades dejadas de fabricar', key: 'unidades_perdidas', width: 16, style: { numFmt: '#,##0' } },
-  ], 'Unidades = minutos parados ÷ 60 × ritmo real de la persona en esa operación (lo que produjo ÷ el tiempo que tuvo disponible). Si no produjo nada, se usa la meta. Las unidades son de cada operación (piezas), no sacos terminados.')
+  ], 'Una fila por persona y hora parada. Los minutos NO se suman: si la línea paró 60 min con 5 personas, son 5 filas de 60 pero la parada es de 60 min (ver hoja 1). Unidades = minutos ÷ 60 × ritmo real de esa persona (lo que produjo ÷ el tiempo que tuvo disponible); sin producción, se usa la meta. Son piezas de cada operación, no sacos terminados.')
   perdidas.forEach(p => up.addRow({ ...p, fecha: fecha(p.fecha), linea: LINEAS[p.linea] || p.linea, nombre: nombreCorto(p.nombre),
     tm_minutos: +p.tm_minutos, ritmo_real: p.ritmo_real == null ? null : +p.ritmo_real, meta: p.meta == null ? null : +p.meta, unidades_perdidas: +p.unidades_perdidas }))
   up.getColumn('descripcion').alignment = { wrapText: true, vertical: 'top' }
