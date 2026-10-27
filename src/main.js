@@ -112,7 +112,7 @@ function requireWrite() {
   if (ROLE !== 'admin') { toast('Modo visita: solo lectura.'); return false }
   return true
 }
-async function saveTiempos(code, rows) {
+async function saveTiempos(code, rows, { sinRepintar = false } = {}) {
   if (!requireWrite()) return false
   const { error } = await supabase.rpc('guardar_tiempos', { p_codigo: code, p_rows: rows })
   if (error) { console.error(error); toast('No se pudo guardar. Intenta de nuevo.'); return false }
@@ -122,7 +122,7 @@ async function saveTiempos(code, rows) {
     const p = D.planning.find(x => x.codigo === code)
     D.codigos[code] = { codigo: code, cliente: p ? p.cliente : '', descripcion: p ? p.descripcion : '', linea: p ? p.linea : '' }
   }
-  render()
+  if (!sinRepintar) render()
   return true
 }
 async function saveCodigo(obj) {
@@ -358,10 +358,18 @@ function bhActualizar(i) {
       const k = f.teAct ? te / f.teAct : 1
       rows = tiemposOf(f.codigo).map(r => r.op === f.operacion ? { ...r, ...base, min: +((+r.min || te / f.actuales.length) * k).toFixed(3), obs: +((+r.min || te / f.actuales.length) * k).toFixed(3) } : { ...r })
     } else rows = [...tiemposOf(f.codigo).map(r => ({ ...r })), { op: f.operacion, min: te, ...base }]
-    if (await saveTiempos(f.codigo, rows)) {
+    if (await saveTiempos(f.codigo, rows, { sinRepintar: true })) {
       // Operación nueva en el código: puede que le falten otras de costura, así que queda por confirmar.
       if (!f.actuales.length) await marcarPorConfirmar(f.codigo, true)
-      closeModal(); toast(`${f.operacion} de ${f.codigo}: ${fmt(te)} min (${fmt(60 / te, 1)}/h).${!f.actuales.length ? ' El código queda incompleto hasta que confirmes sus operaciones.' : ''}`); renderDesdeBH()
+      closeModal(); toast(`${f.operacion} de ${f.codigo}: ${fmt(te)} min (${fmt(60 / te, 1)}/h).${!f.actuales.length ? ' El código queda incompleto hasta que confirmes sus operaciones.' : ''}`)
+      // Solo se marca esa fila: la lista no se reordena ni salta, para seguir operación por operación.
+      const tr = document.querySelector(`[data-act="bhActualizar"][data-arg="${i}"]`)?.closest('tr')
+      if (tr) {
+        tr.style.background = 'var(--good-bg)'
+        const celdas = tr.querySelectorAll('td')
+        celdas[2].innerHTML = `<b>${fmt(60 / te, 1)}/h</b><div class="muted" style="font-size:11px">${fmt(te)} min</div>`
+        celdas[3].innerHTML = `<span class="pill si">✓ Actualizado</span>${!f.actuales.length ? '<div class="muted" style="font-size:11px">Código por confirmar</div>' : ''}`
+      }
     }
   })
 }
