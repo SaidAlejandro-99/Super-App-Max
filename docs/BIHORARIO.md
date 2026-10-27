@@ -131,3 +131,28 @@ anota lo hecho en la hora y el acumulado. Al pie: personal indirecto
   producción × horas que faltan.
 - **Eliminar turno** completo: solo el administrador.
 - Pendiente: carga de pedidos, planning y personal desde Excel (punto 5).
+
+## Ajustes del 27-oct-2026
+
+- **Turnos de 12 h (4 y 5):** 11 casillas. No se muestra la hora de almuerzo
+  (`turnos_def.descanso`: 13 en el turno 4, 1 en el turno 5), salvo que ese turno
+  ya tenga algo registrado en esa hora.
+- **Eficiencia por persona:** vista del turno con la eficiencia de cada operario.
+  El nombre abre su Mi Marcador.
+- **Cambio de referencia sin castigo:** si en una misma hora la persona pasa por
+  dos referencias u operaciones, la hora cuenta una sola vez.
+  - Sus minutos se reparten según el tiempo estándar ganado en cada parte (unidades ÷ meta).
+  - El tiempo muerto de esa hora es el mayor que se anotó.
+  - Ejemplo: 10 de meta 20 y 8 de meta 18 dan 0,5 + 0,44 = 94 %.
+- **Mismas personas al cambiar de referencia:** al agregar una operación en una
+  referencia nueva, la app ofrece las personas que tenía esa operación en la
+  referencia anterior, con su mismo ajuste de meta.
+  - El ajuste de polivalencia solo se pregunta cuando la persona cambia de operación.
+- **Prensa y Liner (producto terminado):** no usan hojas por referencia.
+  - Cada persona anota lo que hizo: referencia (salen primero las trabajadas en
+    la planta en los últimos 2 días), presentación y cantidad.
+  - También se anota el tiempo que estuvo fuera del proceso (manualidad o tiempo muerto).
+  - Metas por hora: prensa 125 en pallet y 60 en bulto; liner 40.
+  - Eficiencia de la persona = tiempo estándar de lo que hizo ÷ tiempo en el proceso
+    (lo que lleva el turno, o todo si ya terminó, menos el tiempo fuera).
+  - Tablas: `bh_pt` (producción) y `bh_pt_personas` (personas y tiempo fuera).

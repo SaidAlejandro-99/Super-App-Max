@@ -97,7 +97,46 @@ function barras(o) {
   const goal = o.metaH ? `<div class="mm-goal" style="bottom:${(o.metaH / tope * 100).toFixed(1)}%"><span>meta ${num(o.metaH, 1)}</span></div>` : ''
   return `<div class="mm-bars">${goal}${bars}</div><div class="mm-hrs">${o.porHora.map(p => `<em>${p.label}</em>`).join('')}</div>`
 }
+// Prensa y Liner: eficiencia = tiempo estándar de lo que hizo ÷ tiempo en el proceso
+// (lo que lleva el turno, o todo si ya terminó, menos el tiempo fuera).
+const PT_TXT = { pallet: 'Pallet', bulto: 'Bulto', liner: 'Liner' }
+function minutosTurnoPT(hoy) {
+  const todas = horasTurno(hoy.def, hoy.fecha, new Set([...Array(24).keys()]))
+  const horas = horasTurno(hoy.def, hoy.fecha, new Set())
+  const total = horas.length * 60
+  if (hoy.estado !== 'abierto' || !hoy.def) return total
+  const domingo = new Date(hoy.fecha + 'T12:00:00').getDay() === 0
+  const ini = String(domingo && hoy.def.inicio_domingo ? hoy.def.inicio_domingo : hoy.def.inicio)
+  let pasados = (Date.now() - new Date(`${hoy.fecha}T${ini.slice(0, 5)}:00`).getTime()) / 60000
+  const almuerzo = todas.length > horas.length ? todas.find(s => !horas.some(h => h.i === s.i)) : null
+  if (almuerzo) pasados = pasados > (almuerzo.i + 1) * 60 ? pasados - 60 : Math.min(pasados, almuerzo.i * 60)
+  return Math.max(0, Math.min(total, Math.round(pasados)))
+}
+function bloquePT(hoy) {
+  const pt = hoy.pt, abierto = hoy.estado === 'abierto', ayer = hoy.fecha !== hoyISO()
+  const proceso = Math.max(0, minutosTurnoPT(hoy) - (+pt.min_fuera || 0))
+  const std = pt.prod.reduce((s, r) => s + (+r.cantidad || 0) / +r.meta * 60, 0)
+  const ef = proceso ? std / proceso : null
+  const total = pt.prod.reduce((s, r) => s + (+r.cantidad || 0), 0)
+  const metas = [...new Set(pt.prod.map(r => +r.meta))]
+  const hTxt = m => num(m / 60, 1) + ' h'
+  return `<div class="mm-live">
+    <div class="mm-lh"><span class="mm-tag-live">${abierto ? '<i class="live-dot"></i>' : ''}${ayer ? 'Ayer' : 'Hoy'} · Turno ${esc(hoy.turno)} · ${abierto ? 'en vivo' : 'terminado'}</span><button class="mm-refresh" data-mm="refrescar">${ico('actualizar')}Actualizar</button></div>
+    <div class="mm-gauge">${ring(ef)}
+      <div class="mm-facts"><div>${esc(lineaTxt(hoy.linea))}<br><b>${num(total)} ${hoy.linea === 'PRENSA' ? 'prensados' : 'enlainados'}</b></div>
+        ${metas.length === 1 ? `<div>Tu meta por hora</div><div class="mm-meta">${num(metas[0])}<span>/h</span></div>` : `<div>Meta: ${hoy.linea === 'PRENSA' ? 'pallet 125/h · bulto 60/h' : '40/h'}</div>`}</div>
+    </div>
+    <div class="mm-falta">
+      <div><b>${hTxt(std)}</b>de trabajo según la meta, por lo que hiciste</div>
+      <div><b>${hTxt(proceso)}</b>en el proceso${+pt.min_fuera ? ` (fuera ${pt.min_fuera} min${pt.causa_txt ? ': ' + esc(pt.causa_txt) : ''})` : ''}</div>
+    </div>
+    ${pt.prod.length ? `<div class="mm-box" style="margin-top:12px">${pt.prod.map(r => `<div class="mm-tr"><div class="mm-nm"><b class="mono">${esc(r.codigo || 'Sin referencia')}</b><small>${esc(PT_TXT[r.presentacion] || '')} · meta ${num(r.meta)}/h</small></div><span class="mm-pct">${num(r.cantidad)}</span></div>`).join('')}</div>`
+      : '<div class="mm-sub" style="margin-top:10px">Tu supervisor aún no ha anotado tu producción de hoy.</div>'}
+    <div class="mm-upd">Tu supervisor anota lo que vas haciendo durante el turno</div>
+  </div>`
+}
 function bloqueHoy(hoy) {
+  if (hoy && hoy.pt && !(hoy.asig || []).length) return bloquePT(hoy)
   if (!hoy) return `<div class="mm-live off"><div class="mm-lh"><span class="mm-tag-live" style="color:var(--muted)">Hoy</span><button class="mm-refresh" data-mm="refrescar">${ico('actualizar')}Actualizar</button></div>
     <div class="mm-sub" style="margin-top:8px">Todavía no apareces en un turno del Bi-horario hoy. Cuando tu supervisor te asigne, aquí verás tu producción hora por hora.</div></div>`
   const X = calcularHoy(hoy)
@@ -153,6 +192,7 @@ function tendencia(hist) {
 }
 const TEND = { up: ['#5fe08f', 'tendencia', 'mejorando'], down: ['#e78a7c', 'baja', 'bajando'], flat: ['#6fb3e0', 'estable', 'estable'] }
 function curva(hist) {
+  if (!hist.length) return { t: null, svg: '' }
   const w = 320, h = 150, x0 = 30, x1 = 312, yv = v => 112 - Math.max(0, Math.min(105, v)) / 100 * 96
   const n = hist.length, xp = i => n <= 1 ? (x0 + x1) / 2 : x0 + i / (n - 1) * (x1 - x0)
   const t = tendencia(hist)

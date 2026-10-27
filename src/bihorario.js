@@ -22,7 +22,12 @@ export const LINEAS = [
   { v: 'CIRCULAR', t: 'Circular' }, { v: '4PANEL', t: '4 Panel' }, { v: 'UPANEL', t: 'U-panel' },
   { v: 'PANEL', t: 'Panel' }, { v: 'PORTASACOS', t: 'Portasacos' }, { v: 'CERROMATOSO', t: 'Cerro Matoso' },
   { v: 'CONTAINER', t: 'Container' }, { v: 'ALTERNAS', t: 'Líneas alternas' },
+  { v: 'PRENSA', t: 'Prensa' }, { v: 'LINER', t: 'Liner' },
 ]
+// Prensa y Liner (producto terminado) no usan hojas por referencia: cada persona
+// anota lo que hizo y el tiempo que estuvo fuera del proceso. Metas por hora:
+const PT_METAS = { PRENSA: [['pallet', 'Pallet', 125], ['bulto', 'Bulto', 60]], LINER: [['liner', 'Liner', 40]] }
+const esPT = linea => !!PT_METAS[linea]
 // Vista del turno: 'hojas' (por referencia) o 'general' (todo unido por operación).
 let vistaTurno = 'hojas', verProyeccion = false
 // Colores para distinguir la referencia (cliente) en la vista general.
@@ -152,16 +157,18 @@ export async function recargarOperarios() {
 async function cargarTurno(id) {
   const s = C.supabase
   try {
-    const [tu, ho, bl, as, rg] = await Promise.all([
+    const [tu, ho, bl, as, rg, pt, pp] = await Promise.all([
       s.from('bh_turnos').select('*').eq('id', id).single(),
       s.from('bh_hojas').select('*').eq('turno_id', id).order('orden'),
       s.from('bh_bloques').select('*').eq('turno_id', id).order('orden'),
       s.from('bh_asignaciones').select('*').eq('turno_id', id).order('orden'),
       s.from('bh_registros').select('*').eq('turno_id', id),
+      s.from('bh_pt').select('*').eq('turno_id', id).order('created_at'),
+      s.from('bh_pt_personas').select('*').eq('turno_id', id).order('orden'),
     ])
-    const err = tu.error || ho.error || bl.error || as.error || rg.error
+    const err = tu.error || ho.error || bl.error || as.error || rg.error || pt.error || pp.error
     if (err) throw err
-    T = { turno: tu.data, hojas: ho.data, bloques: bl.data, asig: as.data, regs: new Map() }
+    T = { turno: tu.data, hojas: ho.data, bloques: bl.data, asig: as.data, regs: new Map(), pt: pt.data, ptp: pp.data }
     rg.data.forEach(r => T.regs.set(r.asignacion_id + '|' + r.hora, r))
   } catch (e) {
     // Sin señal: se usa la última copia guardada en el equipo.
@@ -182,12 +189,12 @@ function leerCopia(id) {
   try {
     const o = JSON.parse(localStorage.getItem('bh_turno_' + id) || 'null'); if (!o) return null
     const regs = new Map(); o.regs.forEach(r => regs.set(r.asignacion_id + '|' + r.hora, r))
-    return { ...o, regs }
+    return { pt: [], ptp: [], ...o, regs }
   } catch (e) { return null }
 }
 function aplicarLocal({ tabla, tipo, datos }) {
   if (!T) return
-  const lista = { bh_hojas: T.hojas, bh_bloques: T.bloques, bh_asignaciones: T.asig }[tabla]
+  const lista = { bh_hojas: T.hojas, bh_bloques: T.bloques, bh_asignaciones: T.asig, bh_pt: T.pt, bh_pt_personas: T.ptp }[tabla]
   if (tabla === 'bh_registros') {
     if (datos.turno_id !== T.turno.id && !(datos.asignacion_id && T.asig.some(a => a.id === datos.asignacion_id))) return
     const k = datos.asignacion_id + '|' + datos.hora
@@ -354,19 +361,29 @@ export function onM1Ready() { if (vista === 'turno' && T) pintarTurno() }
 async function cargarDia(turnos) {
   const ids = turnos.map(t => t.id); if (!ids.length) return new Map()
   const s = C.supabase
-  const [ho, bl, as, rg] = await Promise.all([
+  const [ho, bl, as, rg, pt, pp] = await Promise.all([
     s.from('bh_hojas').select('*').in('turno_id', ids),
     s.from('bh_bloques').select('*').in('turno_id', ids),
     s.from('bh_asignaciones').select('*').in('turno_id', ids),
     s.from('bh_registros').select('asignacion_id, hora, turno_id, unidades, tm_causa, tm_minutos').in('turno_id', ids).range(0, 19999),
+    s.from('bh_pt').select('*').in('turno_id', ids),
+    s.from('bh_pt_personas').select('*').in('turno_id', ids),
   ])
-  if (ho.error || bl.error || as.error || rg.error) return new Map()
+  if (ho.error || bl.error || as.error || rg.error || pt.error || pp.error) return new Map()
   const m = new Map()
-  turnos.forEach(t => m.set(t.id, { turno: t, hojas: ho.data.filter(x => x.turno_id === t.id), bloques: bl.data.filter(x => x.turno_id === t.id), asig: as.data.filter(x => x.turno_id === t.id), regs: new Map() }))
+  turnos.forEach(t => m.set(t.id, { turno: t, hojas: ho.data.filter(x => x.turno_id === t.id), bloques: bl.data.filter(x => x.turno_id === t.id), asig: as.data.filter(x => x.turno_id === t.id), regs: new Map(),
+    pt: pt.data.filter(x => x.turno_id === t.id), ptp: pp.data.filter(x => x.turno_id === t.id) }))
   rg.data.forEach(r => { const X = m.get(r.turno_id); if (X) X.regs.set(r.asignacion_id + '|' + r.hora, r) })
   return m
 }
 function resumenTarjeta(X) {
+  if (esPT(X.turno.linea)) {
+    const r = resumenPT(X)
+    return `
+    ${r.porTipo.length ? `<div class="bh-card-ops">${r.porTipo.map(p => `<div><span>${C.esc(p.t)}</span><b>${C.fmt0(p.cantidad)}</b><small>${p.meta}/h</small></div>`).join('')}</div>` : '<div class="muted" style="font-size:12px">Sin producción registrada</div>'}
+    <div class="bh-card-kpis"><span title="Personas">👥 ${r.personas.length}</span><span title="Eficiencia del grupo">Efic. <b class="${efClase(r.ef)}">${pct(r.ef)}</b></span>
+      <span title="Tiempo fuera del proceso">⏸ ${r.fuera ? r.fuera + ' min' : '0'}</span></div>`
+  }
   const { horas, lista } = resumenOperaciones(X)
   const claves = clavesDe(X.turno.linea)
   const mostrar = X.turno.linea === 'ALTERNAS' ? [...lista].sort((a, b) => b.total - a.total).slice(0, 3) : lista.filter(o => claves.includes(o.operacion))
@@ -431,8 +448,11 @@ function modalNuevoTurno() {
     <div class="field"><label>Línea</label><select id="nt-linea">${LINEAS.map(l => `<option value="${l.v}">${l.t}</option>`).join('')}</select></div>
     <div class="field"><label>Supervisor</label><select id="nt-sup">${opt(p.supervisor_cedula)}</select></div>
     <div class="field"><label>Segundo supervisor (opcional)</label><select id="nt-sup2">${opt('')}</select></div>
-    <div class="field"><label>Meta del turno (sacos de la línea)</label><input type="number" id="nt-meta" inputmode="numeric" min="1" step="1" placeholder="Ej: 300"></div>
+    <div class="field" id="nt-metabox"><label>Meta del turno (sacos de la línea)</label><input type="number" id="nt-meta" inputmode="numeric" min="1" step="1" placeholder="Ej: 300"></div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="nt-ok">Abrir</button></div>`)
+  // Prensa y Liner se miden por persona con su meta fija: no llevan meta del turno.
+  const linSel = document.getElementById('nt-linea')
+  linSel.addEventListener('change', () => { document.getElementById('nt-metabox').hidden = esPT(linSel.value) })
   document.getElementById('nt-ok').addEventListener('click', async () => {
     const fila = {
       id: uid(), fecha: document.getElementById('nt-fecha').value || hoyISO(),
@@ -442,16 +462,17 @@ function modalNuevoTurno() {
       meta_turno: +document.getElementById('nt-meta').value || null,
     }
     if (!fila.supervisor_cedula) { C.toast('Elige el supervisor.'); return }
-    if (!fila.meta_turno || fila.meta_turno <= 0) { C.toast('Escribe la meta del turno.'); return }
+    if (esPT(fila.linea)) fila.meta_turno = null
+    else if (!fila.meta_turno || fila.meta_turno <= 0) { C.toast('Escribe la meta del turno.'); return }
     // Si ese turno ya existe (lo abrió otro supervisor), se abre el mismo.
     const { data: ya } = await C.supabase.from('bh_turnos').select('id').match({ fecha: fila.fecha, turno: fila.turno, linea: fila.linea }).maybeSingle()
     C.closeModal()
     if (ya) { C.toast('Ese turno ya estaba abierto: te llevo a él.'); fechaLista = fila.fecha; await abrirTurno(ya.id); return }
-    T = { turno: { ...fila, estado: 'abierto', observaciones: '' }, hojas: [], bloques: [], asig: [], regs: new Map() }
+    T = { turno: { ...fila, estado: 'abierto', observaciones: '' }, hojas: [], bloques: [], asig: [], regs: new Map(), pt: [], ptp: [] }
     fechaLista = fila.fecha
     encolar('bh_turnos', 'upsert', fila)
     vista = 'turno'; vistaTurno = 'hojas'; hojaActual = null; guardarCopia(); pintarTurno()
-    modalReferencia()
+    if (esPT(fila.linea)) modalPersonasPT(); else modalReferencia()
   })
 }
 
@@ -486,6 +507,7 @@ function pintarTurno() {
       ${C.role() === 'admin' ? '<button class="btn ghost danger" data-a="eliminarTurno">Eliminar turno</button>' : ''}
     </div>
   </div>
+  ${esPT(t.linea) ? pintarPT(ed) + (t.observaciones ? `<div class="section"><h2>Observaciones</h2><div style="white-space:pre-wrap">${C.esc(t.observaciones)}</div></div>` : '') : `
   <div class="bh-meta-turno">
     <span>Meta del turno: <b>${t.meta_turno ? C.fmt0(t.meta_turno) : '—'}</b> sacos</span>
     ${ed ? '<button class="btn sm ghost" data-a="metaTurno">✎</button>' : ''}
@@ -500,7 +522,186 @@ function pintarTurno() {
   ${vistaTurno === 'personas' && T.asig.length ? pintarPersonas()
     : vistaTurno === 'general' && T.hojas.length ? pintarGeneral()
     : hoja ? pintarHoja(hoja, ed) : `<div class="empty">${ed ? 'Agrega la referencia (código del saco) que se va a trabajar.' : 'Este turno no tiene referencias.'}</div>`}
-  ${t.observaciones ? `<div class="section"><h2>Observaciones</h2><div style="white-space:pre-wrap">${C.esc(t.observaciones)}</div></div>` : ''}`
+  ${t.observaciones ? `<div class="section"><h2>Observaciones</h2><div style="white-space:pre-wrap">${C.esc(t.observaciones)}</div></div>` : ''}`}`
+}
+
+/* ---------- Prensa y Liner (producto terminado) ---------- */
+// Minutos de trabajo que lleva el turno: todo el turno si ya terminó; si está
+// abierto, hasta ahora (sin contar la hora de almuerzo de los turnos de 12 h).
+function minutosTurno(X) {
+  const slots = slotsTurno(X.turno.turno, X.turno.fecha), horas = horasTurno(X.turno.turno, X.turno.fecha, X)
+  const total = horas.length * 60
+  const def = CAT.turnos.find(t => t.codigo === X.turno.turno)
+  if (X.turno.estado !== 'abierto' || !def) return total
+  const domingo = new Date(X.turno.fecha + 'T12:00:00').getDay() === 0
+  const ini = String(domingo && def.inicio_domingo ? def.inicio_domingo : def.inicio)
+  const inicio = new Date(`${X.turno.fecha}T${ini.slice(0, 5)}:00`)
+  let pasados = (Date.now() - inicio.getTime()) / 60000
+  const almuerzo = slots.length > horas.length ? slots.find(s => !horas.includes(s)) : null
+  if (almuerzo) pasados = pasados > (almuerzo.i + 1) * 60 ? pasados - 60 : Math.min(pasados, almuerzo.i * 60)
+  return Math.max(0, Math.min(total, Math.round(pasados)))
+}
+// Eficiencia por persona = tiempo estándar de lo que hizo ÷ tiempo que estuvo en el proceso.
+function resumenPT(X) {
+  const minTurno = minutosTurno(X)
+  const personas = [...(X.ptp || [])].sort((a, b) => a.orden - b.orden).map(p => {
+    const prod = (X.pt || []).filter(r => r.cedula === p.cedula)
+    const std = prod.reduce((s, r) => s + (+r.cantidad || 0) / +r.meta_hora * 60, 0)
+    const proceso = Math.max(0, minTurno - (+p.min_fuera || 0))
+    return { ...p, prod, std, proceso, cantidad: prod.reduce((s, r) => s + (+r.cantidad || 0), 0), ef: proceso ? std / proceso : null }
+  })
+  const porTipo = (PT_METAS[X.turno.linea] || []).map(([v, t, meta]) => ({ v, t, meta, cantidad: (X.pt || []).filter(r => r.presentacion === v).reduce((s, r) => s + (+r.cantidad || 0), 0) })).filter(p => p.cantidad)
+  const std = personas.reduce((s, p) => s + p.std, 0), proceso = personas.reduce((s, p) => s + p.proceso, 0)
+  return { minTurno, personas, porTipo, ef: proceso ? std / proceso : null, fuera: personas.reduce((s, p) => s + (+p.min_fuera || 0), 0) }
+}
+const horasTxt = min => C.fmt(min / 60, min % 60 ? 1 : 0) + ' h'
+function pintarPT(ed) {
+  const r = resumenPT(T)
+  const metas = PT_METAS[T.turno.linea].map(([, t, m]) => `${t.toLowerCase()} ${m}/h`).join(' · ')
+  const tit = T.turno.linea === 'PRENSA' ? 'prensado' : 'enlainado'
+  return `
+  <div class="bh-hoja-bar">
+    <div class="hint" style="margin:0">Cada persona anota lo que hizo. Meta: <b>${metas}</b>. ${T.turno.estado === 'abierto' ? `Lleva <b>${horasTxt(r.minTurno)}</b> de turno.` : `Turno de <b>${horasTxt(r.minTurno)}</b>.`}</div>
+    ${ed ? '<button class="btn go" data-a="ptPersona">+ Persona</button>' : ''}
+  </div>
+  <div class="grid kpis" style="margin-bottom:12px">
+    <div class="kpi"><div class="label">Total ${tit}</div><div class="value">${C.fmt0(r.personas.reduce((s, p) => s + p.cantidad, 0))}</div>
+      <div class="sub">${r.porTipo.map(p => `${p.t}: ${C.fmt0(p.cantidad)}`).join(' · ') || 'Sin producción'}</div></div>
+    <div class="kpi"><div class="label">Personas</div><div class="value">${r.personas.length}</div></div>
+    <div class="kpi"><div class="label">Eficiencia del grupo</div><div class="value ${efClase(r.ef)}">${pct(r.ef)}</div></div>
+  </div>
+  ${r.personas.map(p => {
+    const c = p.causa && causa(p.causa)
+    return `<div class="section bh-bloque">
+    <div class="bh-bloque-head">
+      <div><h2 style="margin:0"><span class="bh-nombre" data-a="verMarcador" data-c="${C.esc(p.cedula)}" title="Abrir Mi Marcador">${C.esc(opNombre(p.cedula))}</span></h2>
+        <div class="hint" style="margin:0">En el proceso <b>${horasTxt(p.proceso)}</b>${+p.min_fuera ? ` · fuera <b>${p.min_fuera} min</b>${c ? ' (' + C.esc(c.corta || c.descripcion) + ')' : ''}` : ''}
+          · Hizo <b>${C.fmt0(p.cantidad)}</b> · Eficiencia <b class="${efClase(p.ef)}">${pct(p.ef)}</b></div></div>
+      ${ed ? `<div class="controls" style="margin:0"><button class="btn sm go" data-a="ptProd" data-c="${C.esc(p.cedula)}">+ Producción</button>
+        <button class="btn sm ghost" data-a="ptFuera" data-c="${C.esc(p.cedula)}">Tiempo fuera</button>
+        <button class="btn sm ghost danger" data-a="ptQuitar" data-c="${C.esc(p.cedula)}">Quitar</button></div>` : ''}
+    </div>
+    ${p.prod.length ? `<div class="tablebox"><table><thead><tr><th>Referencia</th><th>Cliente</th><th>Presentación</th><th class="num">Cantidad</th><th class="num">Meta/h</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
+      ${p.prod.map(x => `<tr><td class="mono">${C.esc(x.codigo || '—')}</td><td class="muted">${C.esc(x.codigo ? C.m1.codeInfo(x.codigo).cliente || '' : '')}</td>
+        <td>${C.esc((PT_METAS[T.turno.linea].find(m => m[0] === x.presentacion) || [, x.presentacion])[1])}</td><td class="num"><b>${C.fmt0(x.cantidad)}</b></td><td class="num muted">${C.fmt0(x.meta_hora)}</td>
+        ${ed ? `<td><button class="bh-x" title="Borrar" data-a="ptBorrar" data-id="${x.id}">×</button></td>` : ''}</tr>`).join('')}
+    </tbody></table></div>` : `<div class="muted" style="font-size:13px">${ed ? 'Toca "+ Producción" para anotar lo que hizo.' : 'Sin producción anotada.'}</div>`}
+  </div>` }).join('') || `<div class="empty">${ed ? 'Agrega a las personas que trabajan en este turno.' : 'Sin personas.'}</div>`}`
+}
+function modalPersonasPT() {
+  const ya = new Set((T.ptp || []).map(p => p.cedula))
+  const elegidos = new Set()
+  const linea = T.turno.linea
+  C.openModal(`<h3>Personas en ${C.esc(lineaTxt(linea))}</h3>
+    <input class="search" style="width:100%" type="search" id="pp-q" placeholder="Buscar por nombre o cédula…" autocomplete="off">
+    <div class="hlist" id="pp-res"></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button> <button class="btn go" id="pp-ok">Agregar (0)</button></div>`, true)
+  const draw = q => {
+    const n = q.trim().toLowerCase()
+    const lista = CAT.operarios.filter(o => o.activo && !ya.has(o.cedula) && (!n || (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)))
+      .sort((x, y) => ((y.linea === linea) - (x.linea === linea)) || x.nombre.localeCompare(y.nombre)).slice(0, 150)
+    document.getElementById('pp-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegidos.has(o.cedula) ? 'on' : ''}" data-ced="${o.cedula}">
+      <td style="width:30px"><input type="checkbox" ${elegidos.has(o.cedula) ? 'checked' : ''} tabindex="-1"></td>
+      <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div></td>
+      <td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}</td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
+  }
+  draw('')
+  const q = document.getElementById('pp-q'); setTimeout(() => q.focus(), 50)
+  q.addEventListener('input', e => draw(e.target.value))
+  document.getElementById('pp-res').addEventListener('click', e => {
+    const tr = e.target.closest('[data-ced]'); if (!tr) return
+    const c = tr.dataset.ced; elegidos.has(c) ? elegidos.delete(c) : elegidos.add(c)
+    tr.classList.toggle('on', elegidos.has(c)); tr.querySelector('input').checked = elegidos.has(c)
+    document.getElementById('pp-ok').textContent = `Agregar (${elegidos.size})`
+  })
+  document.getElementById('pp-ok').addEventListener('click', () => {
+    let orden = (T.ptp || []).length
+    elegidos.forEach(ced => cambio('bh_pt_personas', 'upsert', { id: uid(), turno_id: T.turno.id, cedula: ced, min_fuera: 0, causa: null, nota: '', orden: orden++ }))
+    C.closeModal(); pintarTurno()
+  })
+}
+// Producción de una persona: referencia (las trabajadas en la planta los últimos
+// 2 días salen primero), presentación (prensa: pallet o bulto) y cantidad.
+async function modalProduccionPT(ced) {
+  const linea = T.turno.linea, metas = PT_METAS[linea]
+  let codigo = null, pres = metas[0][0]
+  C.openModal(`<h3>Producción · ${C.esc(opNombre(ced))}</h3>
+    <div class="field"><label>Referencia</label>
+      <input class="search" style="width:100%" type="search" id="pr-q" placeholder="Buscar código o cliente…" autocomplete="off">
+      <div class="hlist" id="pr-res" style="max-height:240px"><div class="muted" style="padding:10px">Cargando las referencias de los últimos 2 días…</div></div>
+      <div class="hint" id="pr-sel" style="margin-top:6px">Sin referencia elegida (se puede guardar solo la cantidad).</div></div>
+    ${metas.length > 1 ? `<div class="field"><label>Presentación</label><div class="bh-chips" id="pr-pres">${metas.map(([v, t, m]) => `<button type="button" class="bh-chip ${v === pres ? 'on' : ''}" data-p="${v}">${t} · ${m}/h</button>`).join('')}</div></div>` : ''}
+    <div class="field"><label>Cantidad</label><input type="number" id="pr-cant" inputmode="numeric" min="0" step="1" class="bh-num" placeholder="0"></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="pr-ok">Guardar</button></div>`, true)
+  // Referencias trabajadas en la planta en los últimos 2 días (cualquier línea).
+  let recientes = []
+  try {
+    const d = new Date(T.turno.fecha + 'T12:00:00'); d.setDate(d.getDate() - 2)
+    const desde = d.toISOString().slice(0, 10)
+    const { data: ts } = await C.supabase.from('bh_turnos').select('id').gte('fecha', desde).lte('fecha', T.turno.fecha)
+    const ids = (ts || []).map(t => t.id)
+    if (ids.length) {
+      const [h, p] = await Promise.all([C.supabase.from('bh_hojas').select('codigo').in('turno_id', ids), C.supabase.from('bh_pt').select('codigo').in('turno_id', ids)])
+      recientes = [...new Set([...(h.data || []), ...(p.data || [])].map(x => x.codigo).filter(Boolean))]
+    }
+  } catch (e) { recientes = [] }
+  const res = document.getElementById('pr-res'); if (!res) return
+  const draw = q => {
+    const n = q.trim().toLowerCase()
+    const todos = C.m1.codigos()
+    const match = c => !n || (c.codigo + ' ' + (c.cliente || '') + ' ' + (c.descripcion || '')).toLowerCase().includes(n)
+    const rec = recientes.map(k => todos.find(c => c.codigo === k) || { codigo: k, cliente: '' }).filter(match)
+    const otros = n ? todos.filter(c => !recientes.includes(c.codigo) && match(c)).slice(0, 60) : []
+    const fila = c => `<tr class="bh-pick ${c.codigo === codigo ? 'on' : ''}" data-ref="${C.esc(c.codigo)}"><td class="codecell">${C.esc(c.codigo)}</td><td class="muted" style="font-size:12px">${C.esc(c.cliente || '')}</td></tr>`
+    res.innerHTML = `<table><tbody>
+      ${rec.length ? `<tr><td colspan="2" class="muted" style="font-size:11.5px;padding-top:8px">Trabajadas en los últimos 2 días</td></tr>${rec.map(fila).join('')}` : ''}
+      ${otros.length ? `<tr><td colspan="2" class="muted" style="font-size:11.5px;padding-top:8px">Otras referencias</td></tr>${otros.map(fila).join('')}` : ''}
+      ${!rec.length && !otros.length ? `<tr><td class="empty">${n ? 'Sin resultados' : 'No hay referencias de los últimos 2 días: búscala.'}</td></tr>` : ''}</tbody></table>`
+  }
+  draw('')
+  document.getElementById('pr-q').addEventListener('input', e => draw(e.target.value))
+  res.addEventListener('click', e => {
+    const x = e.target.closest('[data-ref]'); if (!x) return
+    codigo = codigo === x.dataset.ref ? null : x.dataset.ref
+    const info = codigo ? C.m1.codeInfo(codigo) : null
+    document.getElementById('pr-sel').innerHTML = codigo ? `Referencia: <b class="mono">${C.esc(codigo)}</b> ${C.esc(info && info.cliente || '')}` : 'Sin referencia elegida (se puede guardar solo la cantidad).'
+    draw(document.getElementById('pr-q').value)
+    document.getElementById('pr-cant').focus()
+  })
+  const pp = document.getElementById('pr-pres')
+  if (pp) pp.addEventListener('click', e => { const x = e.target.closest('[data-p]'); if (!x) return; pres = x.dataset.p; pp.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', b.dataset.p === pres)) })
+  document.getElementById('pr-ok').addEventListener('click', () => {
+    const cantidad = +document.getElementById('pr-cant').value
+    if (!cantidad || cantidad <= 0) { C.toast('Escribe la cantidad.'); document.getElementById('pr-cant').focus(); return }
+    const meta = metas.find(m => m[0] === pres)[2]
+    cambio('bh_pt', 'upsert', { id: uid(), turno_id: T.turno.id, cedula: ced, codigo, presentacion: pres, cantidad, meta_hora: meta, created_at: new Date().toISOString() })
+    C.closeModal(); pintarTurno()
+  })
+}
+// Tiempo fuera del proceso: manualidad (no había material) o tiempo muerto.
+// No cuenta en contra: se descuenta del tiempo con el que se mide a la persona.
+function modalFueraPT(ced) {
+  const p = (T.ptp || []).find(x => x.cedula === ced); if (!p) return
+  let min = +p.min_fuera || 0, cau = p.causa || 'MAN'
+  const rapidas = CAT.causas.filter(c => c.rapida && c.tipo !== 'tardanza')
+  C.openModal(`<h3>Tiempo fuera · ${C.esc(opNombre(ced))}</h3>
+    <div class="hint" style="color:var(--muted);font-size:12.5px;margin-bottom:10px">El tiempo que no estuvo en ${T.turno.linea === 'PRENSA' ? 'prensa' : 'liner'} (por ejemplo, no había sacos y se fue a manualidad). No le cuenta en contra.</div>
+    <div class="field"><label>Minutos</label><div class="bh-chips" id="fu-min">${[0, 30, 60, 120, 180, 240].map(m => `<button type="button" class="bh-chip ${m === min ? 'on' : ''}" data-m="${m}">${m === 0 ? 'Nada' : m < 60 ? m + ' min' : m / 60 + ' h'}</button>`).join('')}
+      <input type="number" id="fu-x" min="0" max="720" step="5" placeholder="otro" style="width:80px" value="${[0, 30, 60, 120, 180, 240].includes(min) ? '' : min}"></div></div>
+    <div class="field"><label>Motivo</label><div class="bh-chips" id="fu-cau">${rapidas.map(c => `<button type="button" class="bh-chip ${c.tipo} ${c.codigo === cau ? 'on' : ''}" data-c="${c.codigo}">${C.esc(c.corta || c.descripcion)}</button>`).join('')}</div></div>
+    <div class="field"><label>Nota (opcional)</label><input type="text" id="fu-nota" value="${C.esc(p.nota || '')}" placeholder="Ej: apoyo en corte"></div>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="fu-ok">Guardar</button></div>`)
+  const marcar = () => {
+    document.querySelectorAll('#fu-min [data-m]').forEach(b => b.classList.toggle('on', +b.dataset.m === min))
+    document.querySelectorAll('#fu-cau [data-c]').forEach(b => b.classList.toggle('on', b.dataset.c === cau))
+  }
+  document.getElementById('fu-min').addEventListener('click', e => { const x = e.target.closest('[data-m]'); if (!x) return; min = +x.dataset.m; document.getElementById('fu-x').value = ''; marcar() })
+  document.getElementById('fu-x').addEventListener('input', e => { min = Math.max(0, Math.min(720, +e.target.value || 0)); marcar() })
+  document.getElementById('fu-cau').addEventListener('click', e => { const x = e.target.closest('[data-c]'); if (!x) return; cau = x.dataset.c; marcar() })
+  document.getElementById('fu-ok').addEventListener('click', () => {
+    cambio('bh_pt_personas', 'upsert', { ...p, min_fuera: min, causa: min ? cau : null, nota: document.getElementById('fu-nota').value.trim() })
+    C.closeModal(); pintarTurno()
+  })
 }
 
 /* ---------- mapa: una sola tabla por operación (vista general y hoja contraída) ---------- */
@@ -1111,10 +1312,10 @@ function modalTerminar() {
   const sinRegistro = T.asig.filter(a => !slotsTurno(t.turno, t.fecha).some(h => horaRegistrada(reg(a.id, h.i)))).length
   C.openModal(`<h3>${t.estado === 'abierto' ? 'Terminar Bi-horario' : 'Cierre del turno'}</h3>
     ${t.estado === 'abierto' ? `<div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:10px">Al terminar, el turno queda cerrado. Podrás corregirlo hasta 2 días después.${sinRegistro ? ` <b>Ojo: ${sinRegistro} persona(s) no tienen ninguna hora registrada.</b>` : ''}</div>` : ''}
-    <div class="field"><label>Unidades fabricadas en el turno (sacos completos de cada código)</label>
+    ${esPT(t.linea) ? '' : `<div class="field"><label>Unidades fabricadas en el turno (sacos completos de cada código)</label>
       <div class="bh-cierre">${T.hojas.map(h => `<div><span><b class="mono">${C.esc(h.codigo)}</b><small>${C.esc(C.m1.codeInfo(h.codigo).cliente || '')}</small></span>
         <input type="number" class="tt-uni" data-id="${h.id}" inputmode="numeric" min="0" step="1" placeholder="0" value="${h.unidades_reportadas ?? ''}"></div>`).join('') || '<div class="muted">Este turno no tiene referencias.</div>'}</div>
-      <div class="hint" style="color:var(--muted);font-size:12px;margin-top:6px">Meta del turno: <b>${C.fmt0(t.meta_turno || 0)}</b>. Con esto se califica a revisión y patinadores.</div></div>
+      <div class="hint" style="color:var(--muted);font-size:12px;margin-top:6px">Meta del turno: <b>${C.fmt0(t.meta_turno || 0)}</b>. Con esto se califica a revisión y patinadores.</div></div>`}
     <div class="field"><label>Observaciones (personal de amarre, soplado, pie de máquina, novedades…)</label>
       <textarea id="tt-obs" rows="4" style="width:100%;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)">${C.esc(t.observaciones || '')}</textarea></div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="tt-ok">${t.estado === 'abierto' ? '✓ Terminar' : 'Guardar'}</button></div>`)
@@ -1160,6 +1361,18 @@ async function onClick(e) {
     case 'vistaGeneral': vistaTurno = 'general'; return pintarTurno()
     case 'vistaPersonas': vistaTurno = 'personas'; return pintarTurno()
     case 'verMarcador': return C.verMarcador(x.dataset.c)
+    case 'ptPersona': return modalPersonasPT()
+    case 'ptProd': return modalProduccionPT(x.dataset.c)
+    case 'ptFuera': return modalFueraPT(x.dataset.c)
+    case 'ptBorrar': cambio('bh_pt', 'delete', { id }); return pintarTurno()
+    case 'ptQuitar': {
+      const c = x.dataset.c
+      return confirmar('Quitar persona', `¿Quitar a <b>${C.esc(opNombre(c))}</b> de este turno? Se borra también lo que tenía anotado.`, () => {
+        T.pt.filter(r => r.cedula === c).forEach(r => cambio('bh_pt', 'delete', { id: r.id }))
+        const p = T.ptp.find(r => r.cedula === c); if (p) cambio('bh_pt_personas', 'delete', { id: p.id })
+        pintarTurno()
+      })
+    }
     case 'proyeccion': verProyeccion = !verProyeccion; return pintarTurno()
     case 'toggleMapa': hojasMapa.has(hojaActual) ? hojasMapa.delete(hojaActual) : hojasMapa.add(hojaActual); guardarMapa(); return pintarTurno()
     case 'verBloque': {
