@@ -270,20 +270,18 @@ async function renderDesdeBH() {
     </div>
     <div class="hint" style="margin-top:-4px">${esc(BH_CRIT[BH.crit][1])}</div>
     <div class="tablebox"><table>
-      <thead><tr><th>Código</th><th>Operación</th><th class="num">Horas limpias</th><th class="num">Tiempo actual</th><th class="num">Bi-horario</th><th class="num">Diferencia</th><th class="num">Tiempo nuevo</th><th></th></tr></thead>
+      <thead><tr><th>Código y operación</th><th class="num">Horas</th><th class="num">Actual → Bi-horario</th><th class="num">Dif.</th><th></th></tr></thead>
       <tbody>${filas.map(f => {
         const i = todas.indexOf(f)
         return `<tr>
-        <td class="codecell"><span class="linkish" data-go="${esc(f.codigo)}">${esc(f.codigo)}</span><div class="muted" style="font-size:11.5px">${esc(f.info.cliente || '')}</div></td>
-        <td>${esc(f.operacion)}</td>
-        <td class="num">${f.horas}<div class="muted" style="font-size:11px">${f.personas} pers. · ${f.turnos} turnos</div></td>
-        <td class="num">${f.teAct ? `${fmt(f.teAct)} min<div class="muted" style="font-size:11px">${fmt(60 / f.teAct, 1)}/h</div>` : '<span class="pill no">Sin estudio</span>'}</td>
-        <td class="num"><b>${fmt(f.ritmo, 1)}/h</b><div class="muted" style="font-size:11px">${f.plano ? '<span title="Todas las horas tienen el mismo número: revisa que se haya medido hora por hora">⚠ todas iguales</span>' : `entre ${fmt(+f.p25, 0)} y ${fmt(+f.p75, 0)}`}</div></td>
-        <td class="num">${f.dif == null ? '—' : `<b class="${f.dif > 0 ? 'ef-ok' : 'ef-bajo'}">${f.dif > 0 ? '+' : ''}${fmt(f.dif * 100, 0)} %</b>`}</td>
-        <td class="num">${f.teNuevo ? fmt(f.teNuevo) + ' min' : '—'}</td>
-        <td class="nowrap">${!f.suficiente ? `<span class="pill inc" title="Mínimo ${BH_MIN_HORAS} horas, ${BH_MIN_PERS} personas y ${BH_MIN_TURNOS} turnos">Pocos datos</span>` : `<button class="btn sm go admin-only" data-act="bhActualizar" data-arg="${i}">Actualizar</button>`}</td></tr>` }).join('') || `<tr><td colspan="8" class="empty">${(BH.datos || []).length ? 'Nada para revisar con este filtro.' : 'No hay datos del Bi-horario en estas fechas.'}</td></tr>`}</tbody>
+        <td style="max-width:260px"><b>${esc(f.operacion)}</b><div style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span class="mono linkish" data-go="${esc(f.codigo)}">${esc(f.codigo)}</span> <span class="muted">${esc(f.info.cliente || '')}</span></div></td>
+        <td class="num" title="${f.personas} personas · ${f.turnos} turnos">${f.horas}<div class="muted" style="font-size:11px">${f.personas}p · ${f.turnos}t</div></td>
+        <td class="num nowrap">${f.teAct ? fmt(60 / f.teAct, 1) : '<span class="muted">sin estudio</span>'} → <b>${fmt(f.ritmo, 1)}/h</b>
+          <div class="muted" style="font-size:11px">${f.teAct ? fmt(f.teAct) + ' → ' : ''}${f.teNuevo ? fmt(f.teNuevo) + ' min' : ''}${f.plano ? ' · <span title="Todas las horas tienen el mismo número: revisa que se haya medido hora por hora">⚠ iguales</span>' : ''}</div></td>
+        <td class="num">${f.dif == null ? '—' : `<b class="${f.dif > 0 ? 'ef-ok' : 'ef-bajo'}">${f.dif > 0 ? '+' : ''}${fmt(f.dif * 100, 0)}%</b>`}</td>
+        <td class="nowrap">${!f.suficiente ? `<span class="pill inc" title="Mínimo ${BH_MIN_HORAS} horas, ${BH_MIN_PERS} personas y ${BH_MIN_TURNOS} turnos">Pocos datos</span>` : `<button class="btn sm go admin-only" data-act="bhActualizar" data-arg="${i}">Actualizar</button>`}</td></tr>` }).join('') || `<tr><td colspan="5" class="empty">${(BH.datos || []).length ? 'Nada para revisar con este filtro.' : 'No hay datos del Bi-horario en estas fechas.'}</td></tr>`}</tbody>
     </table></div>
-    <div class="count">${filas.length} de ${todas.length} combinaciones de código y operación. "Entre" es el rango donde cae la mitad de las horas (del percentil 25 al 75).</div>
+    <div class="count">${filas.length} de ${todas.length} combinaciones. Horas: horas limpias (p = personas, t = turnos). Arriba, unidades por hora; abajo, minutos por unidad.</div>
   </div>`
   const recargar = () => { BH.desde = document.getElementById('bh-d').value || BH.desde; BH.hasta = document.getElementById('bh-h').value || BH.hasta; renderDesdeBH() }
   document.getElementById('bh-d').addEventListener('change', recargar)
