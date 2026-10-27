@@ -156,3 +156,27 @@ anota lo hecho en la hora y el acumulado. Al pie: personal indirecto
   - Eficiencia de la persona = tiempo estándar de lo que hizo ÷ tiempo en el proceso
     (lo que lleva el turno, o todo si ya terminó, menos el tiempo fuera).
   - Tablas: `bh_pt` (producción) y `bh_pt_personas` (personas y tiempo fuera).
+
+## Tiempos desde el Bi-horario (27-oct-2026)
+
+Pestaña **Desde Bi-horario** en Métodos y Tiempos. Compara la producción por hora
+real con el tiempo estándar, y el admin actualiza con un clic.
+
+- Solo cuentan las **horas limpias**:
+  - con unidades;
+  - sin tiempo muerto ni llegada tarde;
+  - la persona en una sola operación esa hora;
+  - sin ajuste de polivalencia (factor 1);
+  - con meta por hora (no la del turno).
+- Función `mt_desde_bihorario(desde, hasta)` en la base de datos.
+- **Criterio:**
+  - por defecto, la **mediana** de las unidades por hora;
+  - opcional, el percentil 75 (ritmo de los mejores) o el promedio.
+- **Tiempo nuevo** = 60 ÷ unidades por hora.
+  - La hora real ya incluye pausas y fatiga, así que no se aplican valoración ni suplementos aparte.
+- **Mínimo para actualizar:** 6 horas limpias, de 2 personas o más, en 2 turnos o más.
+  - Se avisa si todas las horas tienen el mismo número, porque puede ser que no se haya medido hora por hora.
+- **Al actualizar:**
+  - Si la operación tiene varias partes en el estudio, se ajustan todas en la misma proporción.
+  - Las tomas de cronómetro de esa operación se reemplazan.
+  - En `tiempos.fuente` queda de dónde salió el tiempo (criterio, horas, personas y fechas).
