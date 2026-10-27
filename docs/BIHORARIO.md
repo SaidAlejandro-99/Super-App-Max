@@ -186,3 +186,8 @@ real con el tiempo estándar, y el admin actualiza con un clic.
     - Más lento: actualizar bajaría la exigencia, así que se recomienda cronometrar antes.
   - Por defecto solo se ven las filas para actualizar (sin estudio o más rápido).
   - Se avisa cuando lo anotado es igual a la meta, porque puede que se haya escrito la meta y no lo producido.
+- **Código por confirmar (27-oct):** actualizar unas operaciones no completa el código.
+  - Si desde el Bi-horario se agrega una operación nueva a un código, queda
+    marcado `codigos.ops_por_confirmar` y sale **incompleto**.
+  - Sigue así hasta que el admin abra el código y toque **"Ya están todas las operaciones"**.
+  - El editor muestra qué otras operaciones de costura aparecen en el Bi-horario para ese código.

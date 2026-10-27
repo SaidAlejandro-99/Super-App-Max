@@ -36,7 +36,18 @@ function tiemposOf(code) { return D.tiempos[code] || [] }
 function hasTiempos(code) { return tiemposOf(code).length > 0 }
 function fmtDateShort(iso) { if (!iso) return ''; const d = new Date(iso); if (isNaN(d.getTime())) return ''; return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0') + '/' + String(d.getFullYear()).slice(2) }
 function ultAct(code) { return fmtDateShort(D.actualizado[code]) }
-function statusCode(code) { const r = tiemposOf(code); if (!r.length) return 'sin'; return r.every(x => typeof x.min === 'number' && !isNaN(x.min)) ? 'completo' : 'incompleto' }
+// Un código con operaciones agregadas desde el Bi-horario sigue incompleto hasta
+// que el admin confirme que tiene todas sus operaciones de costura.
+function statusCode(code) { const r = tiemposOf(code); if (!r.length) return 'sin'; if (D.porConfirmar && D.porConfirmar.has(code)) return 'incompleto'; return r.every(x => typeof x.min === 'number' && !isNaN(x.min)) ? 'completo' : 'incompleto' }
+async function marcarPorConfirmar(code, valor) {
+  const { error } = await supabase.from('codigos').update({ ops_por_confirmar: valor, updated_at: new Date().toISOString() }).eq('codigo', code)
+  if (error) { console.error(error); toast('No se pudo guardar el estado del código.'); return false }
+  valor ? D.porConfirmar.add(code) : D.porConfirmar.delete(code)
+  return true
+}
+function confirmarOps(code) {
+  marcarPorConfirmar(code, false).then(ok => { if (ok) { toast('Listo: el código queda con sus operaciones confirmadas.'); render() } })
+}
 function estadoPill(code) { const s = statusCode(code); return s === 'completo' ? '<span class="pill si">Completo</span>' : (s === 'incompleto' ? '<span class="pill inc">Incompleto</span>' : '<span class="pill no">Sin estudio</span>') }
 function codeInfo(code) { return codigoByCode(code) || D.planning.find(p => p.codigo === code) || { codigo: code, cliente: '', descripcion: '', linea: '' } }
 function futuras() { return D.planning.map(p => ({ codigo: p.codigo, cliente: p.cliente, descripcion: p.descripcion, linea: p.linea, prox_fab: p.prox_fab, estado: statusCode(p.codigo), costura: costuraTotal(p.codigo) })) }
@@ -65,16 +76,17 @@ async function loadAll() {
   try {
     const [ops, cods, ts, plan, cfg] = await Promise.all([
       fetchAll('operaciones', 'nombre, familia, tipo', ['nombre']),
-      fetchAll('codigos', 'codigo, cliente, descripcion, linea, tiempos_updated_at', ['codigo']),
+      fetchAll('codigos', 'codigo, cliente, descripcion, linea, tiempos_updated_at, ops_por_confirmar', ['codigo']),
       fetchAll('tiempos', 'codigo, operacion, min, obs, val, supl, muestras, orden, tomado_at, fuente', ['codigo', 'orden']),
       fetchAll('planning', 'codigo, cliente, descripcion, linea, prox_fab, ult_fab, veces, orden', ['orden']),
       fetchAll('config', 'clave, valor', ['clave']),
     ])
     D.operaciones = ops
-    D.codigos = {}; D.actualizado = {}
+    D.codigos = {}; D.actualizado = {}; D.porConfirmar = new Set()
     cods.forEach(c => {
       D.codigos[c.codigo] = { codigo: c.codigo, cliente: c.cliente, descripcion: c.descripcion, linea: c.linea }
       if (c.tiempos_updated_at) D.actualizado[c.codigo] = c.tiempos_updated_at
+      if (c.ops_por_confirmar) D.porConfirmar.add(c.codigo)
     })
     D.tiempos = {}
     ts.forEach(t => {
@@ -276,6 +288,7 @@ async function renderDesdeBH() {
   el.innerHTML = `
   <div class="section">
     <h2>Tiempos de costura desde el Bi-horario</h2>
+    <div class="banner" style="margin:4px 0 10px">Actualizar unas operaciones <b>no completa el código</b>. Si agregas una operación nueva, el código queda <b>incompleto</b> hasta que lo abras (toca el código) y confirmes que tiene todas sus operaciones de costura.</div>
     <div class="hint">Solo operaciones de costura, por cliente. Compara lo que se produce por hora con el estándar de hoy. Cuentan las <b>horas limpias</b> (sin tiempo muerto, la persona en una sola operación y sin ajuste de polivalencia) y se piden al menos ${BH_MIN_HORAS} horas, de ${BH_MIN_PERS} personas, en ${BH_MIN_TURNOS} turnos.</div>
     <div class="grid kpis" style="margin-bottom:12px">
       <div class="kpi bad"><div class="label">Sin estudio</div><div class="value">${n('sin')}</div><div class="sub">llénalos con el Bi-horario</div></div>
@@ -301,7 +314,7 @@ async function renderDesdeBH() {
         const i = todas.indexOf(f), [cls, txt, ayuda] = BH_ESTADO[f.estado]
         const avisos = [f.plano ? 'todas las horas iguales' : '', f.comoMeta ? 'igual a la meta (¿anotaron la meta?)' : ''].filter(Boolean)
         return `<tr>
-        <td><b>${esc(f.operacion)}</b><div class="mono muted" style="font-size:11px"><span class="linkish" data-go="${esc(f.codigo)}">${esc(f.codigo)}</span></div></td>
+        <td><b>${esc(f.operacion)}</b><div class="mono muted" style="font-size:11px"><span class="linkish" data-go="${esc(f.codigo)}" title="Abrir el código para revisar todas sus operaciones">${esc(f.codigo)}</span></div><div style="font-size:10.5px;margin-top:2px">Código: ${estadoPill(f.codigo)}</div></td>
         <td class="num" title="${f.personas} personas · ${f.turnos} turnos">${f.horas}<div class="muted" style="font-size:11px">${f.personas}p · ${f.turnos}t</div></td>
         <td class="num nowrap">${f.actH ? fmt(f.actH, 1) : '—'} → <b>${fmt(f.ritmo, 1)}/h</b>${f.dif != null ? ` <span class="${f.dif > 0 ? 'ef-ok' : 'ef-bajo'}" style="font-size:11.5px">${f.dif > 0 ? '+' : ''}${fmt(f.dif * 100, 0)}%</span>` : ''}
           <div class="muted" style="font-size:11px">${f.teAct ? fmt(f.teAct) + ' → ' : ''}${f.teNuevo ? fmt(f.teNuevo) + ' min' : ''}</div></td>
@@ -333,6 +346,7 @@ function bhActualizar(i) {
     ${f.comoMeta ? '<div class="banner" style="margin-top:8px">⚠ Lo anotado es igual a la meta: puede que el supervisor haya escrito la meta y no lo producido.</div>' : ''}
     ${f.plano ? '<div class="banner" style="margin-top:8px">⚠ Todas las horas tienen el mismo número. Revisa que el supervisor lo haya medido hora por hora antes de actualizar.</div>' : ''}
     ${f.actuales.length > 1 ? `<div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Esta operación tiene ${f.actuales.length} partes en el estudio: se ajustan todas en la misma proporción.</div>` : ''}
+    ${!f.actuales.length ? `<div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Es una operación nueva en este código. El código queda <b>incompleto</b> hasta que entres y confirmes que tiene todas sus operaciones de costura.</div>` : ''}
     <div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Cambia la meta por hora de esta operación en los turnos nuevos del Bi-horario. Las tomas de cronómetro de esta operación se reemplazan; queda anotado que el tiempo salió del Bi-horario.</div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="bh-ok">Actualizar</button></div>`)
   document.getElementById('bh-ok').addEventListener('click', async () => {
@@ -344,7 +358,11 @@ function bhActualizar(i) {
       const k = f.teAct ? te / f.teAct : 1
       rows = tiemposOf(f.codigo).map(r => r.op === f.operacion ? { ...r, ...base, min: +((+r.min || te / f.actuales.length) * k).toFixed(3), obs: +((+r.min || te / f.actuales.length) * k).toFixed(3) } : { ...r })
     } else rows = [...tiemposOf(f.codigo).map(r => ({ ...r })), { op: f.operacion, min: te, ...base }]
-    if (await saveTiempos(f.codigo, rows)) { closeModal(); toast(`${f.operacion} de ${f.codigo}: ${fmt(te)} min (${fmt(60 / te, 1)}/h).`); renderDesdeBH() }
+    if (await saveTiempos(f.codigo, rows)) {
+      // Operación nueva en el código: puede que le falten otras de costura, así que queda por confirmar.
+      if (!f.actuales.length) await marcarPorConfirmar(f.codigo, true)
+      closeModal(); toast(`${f.operacion} de ${f.codigo}: ${fmt(te)} min (${fmt(60 / te, 1)}/h).${!f.actuales.length ? ' El código queda incompleto hasta que confirmes sus operaciones.' : ''}`); renderDesdeBH()
+    }
   })
 }
 
@@ -423,6 +441,14 @@ function renderEditor(el) {
       <div class="meta"><div class="code">${esc(c.codigo)}</div><div class="desc">${esc(c.cliente)} · ${esc(c.descripcion || '')} · Línea ${esc(c.linea || '—')}${ultAct(curCode) ? ` · <b>Act. ${ultAct(curCode)}</b>` : ''}</div></div>
       <div class="tot"><div class="v mono">${fmt(costuraTotal(curCode))}</div><div class="l">min costura · ${nOpsCostura(curCode)} op</div></div>
     </div>
+    ${D.porConfirmar && D.porConfirmar.has(curCode) ? (() => {
+      // Operaciones de costura que aparecen en el Bi-horario para este código y aún no están en el estudio.
+      const enEstudio = new Set(rows.map(r => r.op))
+      const faltan = (BH.datos || []).filter(d => d.codigo === curCode && tipoOf(d.operacion) === 'Costura' && !enEstudio.has(d.operacion))
+      return `<div class="banner">Este código tiene operaciones que vinieron del <b>Bi-horario</b> y queda <b>incompleto</b> hasta que confirmes que están todas las operaciones de costura.
+        ${faltan.length ? `<div style="margin-top:6px">En el Bi-horario también aparecen: ${faltan.map(d => `<b>${esc(d.operacion)}</b> (${fmt(+d.mediana, 1)}/h)`).join(', ')}.</div>` : ''}
+        <div class="controls admin-only" style="margin:8px 0 0"><button class="btn sm go" data-act="confirmarOps" data-arg="${esc(curCode)}">✓ Ya están todas las operaciones</button></div></div>`
+    })() : ''}
     ${!ht ? `<div class="banner">Este código no tiene tiempos. Puedes ingresarlos desde cero abajo, u <b>homologar</b> los de otro código con el mismo saco.</div>
       <div class="controls admin-only"><button class="btn go" data-act="openHomologar">Homologar de otro código</button></div>` : ''}
     <div class="tablebox"><table>
@@ -858,7 +884,7 @@ document.getElementById('exportBtn').addEventListener('click', exportExcel)
 const ACTIONS = {
   closeModal, backToCodes, imgCostura, openHomologar, addRow, editCodigo, openCrono, verRegistro, delRow, doDelRow,
   verRegToCrono, swRun, swLap, swReset, swSave, swSaveConfirm, swHideConfirm, doHomologarFull, addOneOp, editOp, copyImg, dlImg,
-  bhActualizar,
+  bhActualizar, confirmarOps,
 }
 document.addEventListener('click', e => {
   const go = e.target.closest('[data-go]'); if (go) { goCode(go.dataset.go); return }
