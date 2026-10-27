@@ -44,15 +44,25 @@ function horasTurno(def, fecha, usadas) {
 function calcularHoy(hoy) {
   const usadas = new Set((hoy.asig || []).flatMap(a => (a.regs || []).filter(r => r.unidades != null || r.tm_causa).map(r => r.hora)))
   const horas = horasTurno(hoy.def, hoy.fecha, usadas)
-  const ops = (hoy.asig || []).map(a => {
-    const regs = new Map((a.regs || []).map(r => [r.hora, r]))
-    const metaH = a.meta_origen !== 'turno' && a.meta_hora ? +a.meta_hora * (+a.factor || 1) : null
+  // Igual que en el Bi-horario: si en una hora pasó por dos referencias u
+  // operaciones, los minutos de esa hora se reparten según lo ganado en cada una.
+  const asigs = (hoy.asig || []).map(a => ({ a, regs: new Map((a.regs || []).map(r => [r.hora, r])),
+    metaH: a.meta_origen !== 'turno' && a.meta_hora ? +a.meta_hora * (+a.factor || 1) : null }))
+  const registrada = r => r && (r.unidades != null || r.tm_causa)
+  const minutos = (k, i) => {
+    const todas = asigs.map(x => [x, x.regs.get(i)]).filter(([, r]) => registrada(r))
+    const tm = Math.max(0, ...todas.map(([, r]) => r.tm_causa && r.tm_tipo !== 'tardanza' ? (+r.tm_minutos || 0) : 0))
+    const w = todas.map(([x, r]) => x.metaH ? (+r.unidades || 0) / x.metaH : null), suma = w.reduce((s, v) => s + (v || 0), 0)
+    const j = todas.findIndex(([x]) => x === asigs[k])
+    const parte = todas.length === 1 ? 1 : w.every(v => v != null) && suma > 0 ? w[j] / suma : 1 / todas.length
+    return Math.max(0, 60 - tm) * parte
+  }
+  const ops = asigs.map(({ a, regs, metaH }, k) => {
     let total = 0, disp = 0
     const porHora = horas.map(({ i, label }) => {
       const r = regs.get(i)
-      const reg = r && (r.unidades != null || r.tm_causa)
-      const tm = r && r.tm_causa && r.tm_tipo !== 'tardanza' ? (+r.tm_minutos || 0) : 0
-      const d = reg ? Math.max(0, 60 - tm) : 0
+      const reg = registrada(r)
+      const d = reg ? minutos(k, i) : 0
       if (reg) { total += +r.unidades || 0; disp += d }
       return { label, reg, u: reg ? (+r.unidades || 0) : null, esperado: metaH && reg ? metaH * d / 60 : null }
     })
@@ -99,7 +109,7 @@ function bloqueHoy(hoy) {
     const faltaTurno = una && o.metaTurno ? Math.max(0, o.metaTurno - o.total) : null
     const horasOp = o.porHora.filter(p => p.reg).length
     return `<div class="mm-op">
-      <div class="mm-op-h" ${una ? 'hidden' : ''}><b>${esc(o.operacion)}</b><span class="mono ${efCls(o.ef)}">${o.metaH ? `meta ${num(o.metaH, 1)}/h` : 'meta del turno'}</span></div>
+      <div class="mm-op-h" ${una ? 'hidden' : ''}><b>${esc(o.operacion)}${X.ops.filter(p => p.operacion === o.operacion).length > 1 ? ` <small class="mono" style="color:var(--muted);font-weight:500">${esc(o.codigo || '')}</small>` : ''}</b><span class="mono ${efCls(o.ef)}">${o.metaH ? `meta ${num(o.metaH, 1)}/h` : 'meta del turno'}</span></div>
       ${o.metaH ? `<div class="mm-falta">
         <div><b>${num(o.total)} / ${num(o.esperado)}</b>${abierto ? 'llevas' : 'hiciste'} vs. lo esperado en las horas registradas</div>
         ${una ? `<div><b class="${faltaTurno ? 'mm-med' : 'mm-ok'}">${faltaTurno ? num(faltaTurno) : num(o.metaTurno)}</b>${faltaTurno ? `${abierto ? 'te faltan' : 'faltaron'} para tu meta del turno (${num(o.metaTurno)})` : 'meta del turno cumplida'}</div>`

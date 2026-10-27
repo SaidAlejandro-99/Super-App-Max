@@ -250,12 +250,33 @@ function calificacionTurno(X) {
   if (!meta || X.turno.estado !== 'terminado' || !rep.length) return null
   return X.hojas.reduce((s, h) => s + (+h.unidades_reportadas || 0), 0) / meta
 }
+// Una persona puede pasar de una referencia u operación a otra dentro de la misma
+// hora. Esa hora no se le cuenta dos veces: sus minutos se reparten entre lo que
+// hizo según el tiempo estándar ganado en cada parte (unidades ÷ meta).
+// Ej.: 10 de meta 20 y 8 de meta 18 en la misma hora → 0,5 + 0,44 = 94 %.
+function dispReparto(X, a, i) {
+  const r = regX(X, a.id, i)
+  if (!horaRegistrada(r)) return 0
+  const otras = X.asig.filter(o => o.cedula === a.cedula && o.id !== a.id).map(o => [o, regX(X, o.id, i)]).filter(([, g]) => horaRegistrada(g))
+  if (!otras.length) return minutosDisponibles(r)
+  const todas = [[a, r], ...otras]
+  // El tiempo muerto de esa hora es uno solo para la persona (el mayor que se anotó).
+  const tm = Math.max(...todas.map(([, g]) => { const c = g.tm_causa && causa(g.tm_causa); return c && c.tipo !== 'tardanza' ? (+g.tm_minutos || 0) : 0 }))
+  const ganado = ([o, g]) => {
+    const b = X.bloques.find(x => x.id === o.bloque_id)
+    const m = b && b.meta_origen !== 'turno' && b.meta_hora ? b.meta_hora * (+o.factor || 1) : null
+    return m ? (+g.unidades || 0) / m : null
+  }
+  const w = todas.map(ganado), suma = w.reduce((s, v) => s + (v || 0), 0)
+  const parte = w.every(v => v != null) && suma > 0 ? w[0] / suma : 1 / todas.length
+  return Math.max(0, 60 - tm) * parte
+}
 function resumenAsig(a, bloque, X = T) {
   let total = 0, disp = 0
   const acum = []
   slotsTurno(X.turno.turno, X.turno.fecha).forEach(({ i }) => {
     const r = regX(X, a.id, i)
-    if (horaRegistrada(r)) { total += +r.unidades || 0; disp += minutosDisponibles(r) }
+    if (horaRegistrada(r)) { total += +r.unidades || 0; disp += dispReparto(X, a, i) }
     acum.push(total)
   })
   if (bloque.meta_origen === 'turno') return { total, disp, acum, esperado: null, ef: calificacionTurno(X) }
@@ -546,17 +567,19 @@ function pintarPersonas() {
     const b = T.bloques.find(x => x.id === a.bloque_id); if (!b) return
     const r = resumenAsig(a, b)
     let p = mapa.get(a.cedula)
-    if (!p) { p = { cedula: a.cedula, ops: [], total: 0, esperado: 0, horas: 0, tm: 0, soloTurno: true }; mapa.set(a.cedula, p) }
+    if (!p) { p = { cedula: a.cedula, ops: [], total: 0, esperado: 0, horasSet: new Set(), tmHora: new Map(), soloTurno: true }; mapa.set(a.cedula, p) }
+    // Si en una misma hora estuvo en dos referencias u operaciones, la hora y su tiempo muerto cuentan una vez.
     slots.forEach(h => {
       const g = reg(a.id, h.i); if (!horaRegistrada(g)) return
-      p.horas++
-      const c = g.tm_causa && causa(g.tm_causa); if (c && c.tipo !== 'tardanza') p.tm += +g.tm_minutos || 0
+      p.horasSet.add(h.i)
+      const c = g.tm_causa && causa(g.tm_causa)
+      if (c && c.tipo !== 'tardanza') p.tmHora.set(h.i, Math.max(p.tmHora.get(h.i) || 0, +g.tm_minutos || 0))
     })
     p.ops.push({ operacion: b.operacion, ef: r.ef, total: r.total, turno: b.meta_origen === 'turno' })
     p.total += r.total
     if (r.esperado) { p.esperado += r.esperado; p.soloTurno = false }
   })
-  const lista = [...mapa.values()].map(p => ({ ...p, ef: p.esperado ? p.total / p.esperado : (p.soloTurno ? calificacionTurno(T) : null) }))
+  const lista = [...mapa.values()].map(p => ({ ...p, horas: p.horasSet.size, tm: [...p.tmHora.values()].reduce((s, v) => s + v, 0), ef: p.esperado ? p.total / p.esperado : (p.soloTurno ? calificacionTurno(T) : null) }))
     .sort((x, y) => (y.ef ?? -1) - (x.ef ?? -1))
   const conEf = lista.filter(p => p.esperado)
   const efLinea = conEf.length ? conEf.reduce((s, p) => s + p.total, 0) / conEf.reduce((s, p) => s + p.esperado, 0) : null
@@ -838,9 +861,52 @@ function modalOperacion(bloqueId) {
     else {
       const fila = { id: uid(), turno_id: T.turno.id, hoja_id: hoja.id, operacion: nombre, meta_hora: mv, meta_origen: origen, orden: T.bloques.filter(x => x.hoja_id === hoja.id).length }
       cambio('bh_bloques', 'upsert', fila)
-      C.closeModal(); pintarTurno(); modalPersonas(fila.id); return
+      C.closeModal(); pintarTurno()
+      const previa = personasDeReferenciaAnterior(hoja, nombre)
+      if (previa) modalMismasPersonas(fila.id, previa); else modalPersonas(fila.id)
+      return
     }
     C.closeModal(); pintarTurno()
+  })
+}
+
+// Cambio de referencia en el turno: la misma operación de la referencia anterior
+// suele seguir con la misma gente. Devuelve { hoja, asig } o null.
+function personasDeReferenciaAnterior(hoja, operacion) {
+  const antes = T.hojas.filter(h => h.id !== hoja.id && (h.orden ?? 0) <= (hoja.orden ?? 0)).sort((a, b) => (b.orden ?? 0) - (a.orden ?? 0))
+  for (const h of antes) {
+    const b = T.bloques.find(x => x.hoja_id === h.id && x.operacion === operacion)
+    const asig = b ? T.asig.filter(a => a.bloque_id === b.id).sort((p, q) => p.orden - q.orden) : []
+    if (asig.length) return { hoja: h, asig }
+  }
+  return null
+}
+function modalMismasPersonas(bloqueId, previa) {
+  const b = T.bloques.find(x => x.id === bloqueId); if (!b) return
+  const elegidos = new Set(previa.asig.map(a => a.cedula))
+  C.openModal(`<h3>¿Las mismas personas?</h3>
+    <div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:10px">En <b class="mono">${C.esc(previa.hoja.codigo)}</b> estaban estas personas en <b>${C.esc(b.operacion)}</b>. Quita a quien no siga y agrégalas de una vez.</div>
+    <div class="hlist" id="mp-res"><table><tbody>${previa.asig.map(a => `<tr class="bh-pick on" data-ced="${a.cedula}">
+      <td style="width:30px"><input type="checkbox" checked tabindex="-1"></td>
+      <td>${C.esc(opNombre(a.cedula))}${+a.factor < 1 ? ` <span class="muted" style="font-size:11.5px">· meta al ${Math.round(a.factor * 100)} %</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
+    <div class="modal-actions" style="justify-content:space-between">
+      <button class="btn ghost" id="mp-otras">Elegir otras personas</button>
+      <button class="btn go" id="mp-ok">Agregar (${elegidos.size})</button>
+    </div>`)
+  document.getElementById('mp-res').addEventListener('click', e => {
+    const tr = e.target.closest('[data-ced]'); if (!tr) return
+    const c = tr.dataset.ced; elegidos.has(c) ? elegidos.delete(c) : elegidos.add(c)
+    tr.classList.toggle('on', elegidos.has(c)); tr.querySelector('input').checked = elegidos.has(c)
+    document.getElementById('mp-ok').textContent = `Agregar (${elegidos.size})`
+  })
+  document.getElementById('mp-otras').addEventListener('click', () => { C.closeModal(); modalPersonas(bloqueId) })
+  document.getElementById('mp-ok').addEventListener('click', () => {
+    let orden = T.asig.filter(a => a.bloque_id === b.id).length
+    // Siguen en la misma operación: se conserva el ajuste de meta que tenían.
+    previa.asig.filter(a => elegidos.has(a.cedula)).forEach(a =>
+      cambio('bh_asignaciones', 'upsert', { id: uid(), turno_id: T.turno.id, bloque_id: b.id, cedula: a.cedula, orden: orden++, factor: +a.factor || 1 }))
+    C.closeModal(); pintarTurno()
+    C.toast(`${elegidos.size} persona(s) agregadas a ${b.operacion}.`)
   })
 }
 
@@ -880,9 +946,13 @@ function modalPersonas(bloqueId) {
     let orden = T.asig.filter(a => a.bloque_id === b.id).length
     const lista = [...elegidos]
     C.closeModal()
-    // Polivalencia: si la persona ya trabaja en otra operación del turno, se pregunta cómo ponderar su meta.
+    // Polivalencia: si la persona ya trabaja en OTRA operación del turno, se pregunta cómo ponderar su meta.
+    // Si es la misma operación en otra referencia, conserva el ajuste que tenía.
+    const opDe = a => (T.bloques.find(x => x.id === a.bloque_id) || {}).operacion
     for (const ced of lista) {
-      const factor = enTurno.has(ced) && b.meta_origen !== 'turno' ? await preguntarFactor(ced, b) : 1
+      const suyas = T.asig.filter(a => a.cedula === ced && a.bloque_id !== b.id)
+      const misma = suyas.find(a => opDe(a) === b.operacion)
+      const factor = b.meta_origen === 'turno' ? 1 : misma ? (+misma.factor || 1) : suyas.length ? await preguntarFactor(ced, b) : 1
       cambio('bh_asignaciones', 'upsert', { id: uid(), turno_id: T.turno.id, bloque_id: b.id, cedula: ced, orden: orden++, factor })
     }
     C.closeModal(); pintarTurno()

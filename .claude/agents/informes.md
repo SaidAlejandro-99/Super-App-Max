@@ -83,9 +83,13 @@ Pasos:
      - Si no produjo nada, se usa la meta × el factor de polivalencia.
    - Ejemplo de Said: paró 30 min e iba a 80/h → 0,5 × 80 = 40 unidades dejadas de fabricar.
    - Son unidades de cada operación (piezas), no sacos terminados. No las sumes como sacos.
+   - Si en una misma hora la persona pasó por dos referencias u operaciones, esa
+     hora se reparte entre ellas según lo ganado en cada una (unidades ÷ meta),
+     igual que en el Bi-horario. Así no se cuenta la hora dos veces.
    ```sql
    with reg as (
-     select g.*, a.cedula, coalesce(a.factor, 1) factor, b.operacion, b.meta_hora, t.fecha, t.turno, t.linea, c.tipo, c.descripcion
+     select g.*, a.cedula, coalesce(a.factor, 1) factor, b.operacion, b.meta_hora, t.fecha, t.turno, t.linea, c.tipo, c.descripcion,
+       case when b.meta_origen <> 'turno' then nullif(b.meta_hora * coalesce(a.factor, 1), 0) end meta_ef
      from bh_registros g
      join bh_asignaciones a on a.id = g.asignacion_id
      join bh_bloques b on b.id = a.bloque_id
@@ -95,15 +99,21 @@ Pasos:
        and (g.unidades is not null or g.tm_causa is not null)
    ),
    ritmo as (
-     select asignacion_id, sum(coalesce(unidades, 0)) unidades,
-       sum(60 - case when tm_causa is not null and tipo <> 'tardanza' then coalesce(tm_minutos, 0) else 0 end) min_disp
-     from reg group by 1
+     select asignacion_id, sum(coalesce(unidades, 0)) unidades, sum(min_disp) min_disp from (
+       select r.asignacion_id, r.unidades,
+         (60 - max(case when r.tm_causa is not null and r.tipo <> 'tardanza' then coalesce(r.tm_minutos, 0) else 0 end) over w)
+         * case when count(*) over w = 1 then 1
+                when bool_and(r.meta_ef is not null) over w and sum(coalesce(r.unidades, 0) / r.meta_ef) over w > 0
+                  then (coalesce(r.unidades, 0) / r.meta_ef) / sum(coalesce(r.unidades, 0) / r.meta_ef) over w
+                else 1.0 / count(*) over w end as min_disp
+       from reg r window w as (partition by r.turno_id, r.cedula, r.hora)) z
+     group by 1
    ),
    perd as (
      select r.fecha, r.turno, d.orden, r.linea, r.operacion, o.nombre, r.tm_causa codigo, r.descripcion, r.tm_minutos,
        round(case when x.min_disp > 0 and x.unidades > 0 then x.unidades / (x.min_disp / 60.0) end, 1) ritmo_real,
-       round(r.meta_hora * r.factor, 1) meta,
-       round(r.tm_minutos / 60.0 * coalesce(case when x.min_disp > 0 and x.unidades > 0 then x.unidades / (x.min_disp / 60.0) end, r.meta_hora * r.factor, 0))::int unidades_perdidas
+       round(r.meta_ef, 1) meta,
+       round(r.tm_minutos / 60.0 * coalesce(case when x.min_disp > 0 and x.unidades > 0 then x.unidades / (x.min_disp / 60.0) end, r.meta_ef, 0))::int unidades_perdidas
      from reg r join ritmo x on x.asignacion_id = r.asignacion_id
      join operarios o on o.cedula = r.cedula join turnos_def d on d.codigo = r.turno
      where r.tipo = 'perdida'
