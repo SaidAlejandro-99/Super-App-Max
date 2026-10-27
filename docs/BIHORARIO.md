@@ -180,3 +180,9 @@ real con el tiempo estándar, y el admin actualiza con un clic.
   - Si la operación tiene varias partes en el estudio, se ajustan todas en la misma proporción.
   - Las tomas de cronómetro de esa operación se reemplazan.
   - En `tiempos.fuente` queda de dónde salió el tiempo (criterio, horas, personas y fechas).
+- **Ajuste (27-oct):**
+  - La pestaña muestra solo operaciones de **costura**, agrupadas por **cliente**.
+  - Cada fila lleva un estado: **Sin estudio**, **Más rápido** (conviene actualizar), **Más lento** o **Al día**.
+    - Más lento: actualizar bajaría la exigencia, así que se recomienda cronometrar antes.
+  - Por defecto solo se ven las filas para actualizar (sin estudio o más rápido).
+  - Se avisa cuando lo anotado es igual a la meta, porque puede que se haya escrito la meta y no lo producido.

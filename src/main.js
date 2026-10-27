@@ -227,19 +227,30 @@ function renderFutura() {
 // 60 ÷ unidades por hora (sin valoración ni suplementos aparte).
 const BH_MIN_HORAS = 6, BH_MIN_PERS = 2, BH_MIN_TURNOS = 2
 const isoDias = n => { const d = new Date(); d.setDate(d.getDate() + n); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) }
-const BH = { desde: isoDias(-60), hasta: isoDias(0), q: '', ver: 'dif', crit: 'mediana', datos: null, clave: '' }
+const BH = { desde: isoDias(-60), hasta: isoDias(0), q: '', ver: 'accion', crit: 'mediana', datos: null, clave: '' }
 const BH_CRIT = { mediana: ['Mediana', 'La mitad de las horas va más rápido y la otra mitad más lento. Recomendado: no lo mueven las horas raras.'], p75: ['Ritmo de los mejores (percentil 75)', 'El ritmo que alcanza el 25 % más rápido de las horas. Sirve para metas más exigentes.'], promedio: ['Promedio', 'El promedio simple de todas las horas.'] }
 function filasBH() {
-  return (BH.datos || []).map(d => {
+  return (BH.datos || []).filter(d => tipoOf(d.operacion) === 'Costura').map(d => {
     const actuales = tiemposOf(d.codigo).filter(r => r.op === d.operacion)
     const teAct = actuales.reduce((s, r) => s + (+r.min || 0), 0) || null
     const ritmo = +d[BH.crit]
     const teNuevo = ritmo > 0 ? 60 / ritmo : null
-    const dif = teAct && ritmo ? (ritmo - 60 / teAct) / (60 / teAct) : null
+    const actH = teAct ? 60 / teAct : null
+    const dif = actH && ritmo ? (ritmo - actH) / actH : null
     // Si todas las horas tienen el mismo número, puede que se haya anotado igual para todos y no medido.
     const plano = d.horas >= 4 && +d.p25 === +d.p75
-    return { ...d, actuales, teAct, ritmo, teNuevo, dif, plano, suficiente: d.horas >= BH_MIN_HORAS && d.personas >= BH_MIN_PERS && d.turnos >= BH_MIN_TURNOS, info: codeInfo(d.codigo) }
+    // Igual a la meta: puede que el supervisor haya anotado la meta y no lo producido.
+    const comoMeta = actH && Math.abs(+d.mediana - actH) / actH < 0.02
+    const estado = !teAct ? 'sin' : dif >= 0.1 ? 'subir' : dif <= -0.1 ? 'bajar' : 'ok'
+    return { ...d, actuales, teAct, actH, ritmo, teNuevo, dif, plano, comoMeta, estado,
+      suficiente: d.horas >= BH_MIN_HORAS && d.personas >= BH_MIN_PERS && d.turnos >= BH_MIN_TURNOS, info: codeInfo(d.codigo) }
   })
+}
+const BH_ESTADO = {
+  sin: ['no', 'Sin estudio', 'No tiene tiempo: con esto lo llenas.'],
+  subir: ['si', 'Más rápido', 'Producen más de lo que dice el estándar: conviene actualizar.'],
+  bajar: ['inc', 'Más lento', 'Producen menos que el estándar. Actualizar bajaría la exigencia: mejor cronometra antes.'],
+  ok: ['man', 'Al día', 'El estándar coincide con lo que se produce.'],
 }
 async function renderDesdeBH() {
   const el = document.getElementById('p-bihorario')
@@ -253,36 +264,52 @@ async function renderDesdeBH() {
   }
   const todas = filasBH()
   const q = BH.q.trim().toLowerCase()
+  const accion = f => f.suficiente && (f.estado === 'sin' || f.estado === 'subir')
   let filas = todas.filter(f => !q || (f.codigo + ' ' + f.operacion + ' ' + (f.info.cliente || '')).toLowerCase().includes(q))
-  if (BH.ver === 'dif') filas = filas.filter(f => f.suficiente && (f.teAct == null || Math.abs(f.dif) >= 0.1))
+  if (BH.ver === 'accion') filas = filas.filter(accion)
   if (BH.ver === 'suf') filas = filas.filter(f => f.suficiente)
-  filas.sort((a, b) => (b.suficiente - a.suficiente) || (Math.abs(b.dif ?? 1) - Math.abs(a.dif ?? 1)) || b.horas - a.horas)
+  // Agrupado por cliente; primero los que tienen más para actualizar.
+  const grupos = new Map()
+  filas.forEach(f => { const k = f.info.cliente || 'Sin cliente'; if (!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(f) })
+  const lista = [...grupos.entries()].sort((a, b) => b[1].filter(accion).length - a[1].filter(accion).length || a[0].localeCompare(b[0]))
+  const n = k => todas.filter(f => f.suficiente && f.estado === k).length
   el.innerHTML = `
   <div class="section">
-    <h2>Actualizar tiempos desde el Bi-horario</h2>
-    <div class="hint">Lo que de verdad se produce por hora en cada operación, según el Bi-horario, frente al tiempo estándar de hoy. Solo cuentan las <b>horas limpias</b>: con unidades, sin tiempo muerto, la persona en una sola operación esa hora y sin ajuste de polivalencia. Para actualizar se piden al menos ${BH_MIN_HORAS} horas, de ${BH_MIN_PERS} personas o más y en ${BH_MIN_TURNOS} turnos o más.</div>
+    <h2>Tiempos de costura desde el Bi-horario</h2>
+    <div class="hint">Solo operaciones de costura, por cliente. Compara lo que se produce por hora con el estándar de hoy. Cuentan las <b>horas limpias</b> (sin tiempo muerto, la persona en una sola operación y sin ajuste de polivalencia) y se piden al menos ${BH_MIN_HORAS} horas, de ${BH_MIN_PERS} personas, en ${BH_MIN_TURNOS} turnos.</div>
+    <div class="grid kpis" style="margin-bottom:12px">
+      <div class="kpi bad"><div class="label">Sin estudio</div><div class="value">${n('sin')}</div><div class="sub">llénalos con el Bi-horario</div></div>
+      <div class="kpi good"><div class="label">Más rápido que el estándar</div><div class="value">${n('subir')}</div><div class="sub">conviene actualizar</div></div>
+      <div class="kpi"><div class="label">Más lento que el estándar</div><div class="value">${n('bajar')}</div><div class="sub">cronometra antes</div></div>
+      <div class="kpi"><div class="label">Al día</div><div class="value">${n('ok')}</div><div class="sub">no hay que hacer nada</div></div>
+    </div>
     <div class="controls">
       <label class="muted" style="font-size:13px">Desde <input type="date" id="bh-d" value="${BH.desde}"></label>
       <label class="muted" style="font-size:13px">Hasta <input type="date" id="bh-h" value="${BH.hasta}"></label>
       <select id="bh-crit">${Object.entries(BH_CRIT).map(([k, [t]]) => `<option value="${k}" ${k === BH.crit ? 'selected' : ''}>Criterio: ${t}</option>`).join('')}</select>
-      <select id="bh-ver"><option value="dif" ${BH.ver === 'dif' ? 'selected' : ''}>Para revisar (diferencia de 10 % o más, o sin estudio)</option><option value="suf" ${BH.ver === 'suf' ? 'selected' : ''}>Con datos suficientes</option><option value="todos" ${BH.ver === 'todos' ? 'selected' : ''}>Todas</option></select>
-      <input class="search" type="search" id="bh-q" placeholder="Buscar código, cliente u operación…" value="${esc(BH.q)}">
+      <select id="bh-ver"><option value="accion" ${BH.ver === 'accion' ? 'selected' : ''}>Para actualizar (sin estudio o más rápido)</option><option value="suf" ${BH.ver === 'suf' ? 'selected' : ''}>Todas con datos suficientes</option><option value="todos" ${BH.ver === 'todos' ? 'selected' : ''}>Todas</option></select>
+      <input class="search" type="search" id="bh-q" placeholder="Buscar cliente o código…" value="${esc(BH.q)}">
     </div>
     <div class="hint" style="margin-top:-4px">${esc(BH_CRIT[BH.crit][1])}</div>
+  </div>
+  ${lista.map(([cliente, fs]) => `
+  <div class="section mt-bh" style="padding:12px 14px">
+    <h2 style="font-size:15px">${esc(cliente)} <span class="muted" style="font-weight:500;font-size:12.5px">· ${fs.filter(accion).length} para actualizar</span></h2>
     <div class="tablebox"><table>
-      <thead><tr><th>Código y operación</th><th class="num">Horas</th><th class="num">Actual → Bi-horario</th><th class="num">Dif.</th><th></th></tr></thead>
-      <tbody>${filas.map(f => {
-        const i = todas.indexOf(f)
+      <thead><tr><th>Operación</th><th class="num">Horas</th><th class="num">Estándar → Real</th><th></th></tr></thead>
+      <tbody>${fs.sort((a, b) => a.codigo.localeCompare(b.codigo) || a.operacion.localeCompare(b.operacion)).map(f => {
+        const i = todas.indexOf(f), [cls, txt, ayuda] = BH_ESTADO[f.estado]
+        const avisos = [f.plano ? 'todas las horas iguales' : '', f.comoMeta ? 'igual a la meta (¿anotaron la meta?)' : ''].filter(Boolean)
         return `<tr>
-        <td style="max-width:260px"><b>${esc(f.operacion)}</b><div style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span class="mono linkish" data-go="${esc(f.codigo)}">${esc(f.codigo)}</span> <span class="muted">${esc(f.info.cliente || '')}</span></div></td>
+        <td><b>${esc(f.operacion)}</b><div class="mono muted" style="font-size:11px"><span class="linkish" data-go="${esc(f.codigo)}">${esc(f.codigo)}</span></div></td>
         <td class="num" title="${f.personas} personas · ${f.turnos} turnos">${f.horas}<div class="muted" style="font-size:11px">${f.personas}p · ${f.turnos}t</div></td>
-        <td class="num nowrap">${f.teAct ? fmt(60 / f.teAct, 1) : '<span class="muted">sin estudio</span>'} → <b>${fmt(f.ritmo, 1)}/h</b>
-          <div class="muted" style="font-size:11px">${f.teAct ? fmt(f.teAct) + ' → ' : ''}${f.teNuevo ? fmt(f.teNuevo) + ' min' : ''}${f.plano ? ' · <span title="Todas las horas tienen el mismo número: revisa que se haya medido hora por hora">⚠ iguales</span>' : ''}</div></td>
-        <td class="num">${f.dif == null ? '—' : `<b class="${f.dif > 0 ? 'ef-ok' : 'ef-bajo'}">${f.dif > 0 ? '+' : ''}${fmt(f.dif * 100, 0)}%</b>`}</td>
-        <td class="nowrap">${!f.suficiente ? `<span class="pill inc" title="Mínimo ${BH_MIN_HORAS} horas, ${BH_MIN_PERS} personas y ${BH_MIN_TURNOS} turnos">Pocos datos</span>` : `<button class="btn sm go admin-only" data-act="bhActualizar" data-arg="${i}">Actualizar</button>`}</td></tr>` }).join('') || `<tr><td colspan="5" class="empty">${(BH.datos || []).length ? 'Nada para revisar con este filtro.' : 'No hay datos del Bi-horario en estas fechas.'}</td></tr>`}</tbody>
+        <td class="num nowrap">${f.actH ? fmt(f.actH, 1) : '—'} → <b>${fmt(f.ritmo, 1)}/h</b>${f.dif != null ? ` <span class="${f.dif > 0 ? 'ef-ok' : 'ef-bajo'}" style="font-size:11.5px">${f.dif > 0 ? '+' : ''}${fmt(f.dif * 100, 0)}%</span>` : ''}
+          <div class="muted" style="font-size:11px">${f.teAct ? fmt(f.teAct) + ' → ' : ''}${f.teNuevo ? fmt(f.teNuevo) + ' min' : ''}</div></td>
+        <td><span class="pill ${cls}" title="${esc(ayuda)}">${txt}</span>${avisos.length ? `<div style="font-size:11px;color:var(--warn)">⚠ ${esc(avisos.join(' · '))}</div>` : ''}
+          <div style="margin-top:4px">${!f.suficiente ? `<span class="pill inc" title="Mínimo ${BH_MIN_HORAS} horas, ${BH_MIN_PERS} personas y ${BH_MIN_TURNOS} turnos">Pocos datos</span>`
+          : f.estado === 'ok' ? '' : `<button class="btn sm ${accion(f) ? 'go' : 'ghost'} admin-only" data-act="bhActualizar" data-arg="${i}">Actualizar</button>`}</div></td></tr>` }).join('')}</tbody>
     </table></div>
-    <div class="count">${filas.length} de ${todas.length} combinaciones. Horas: horas limpias (p = personas, t = turnos). Arriba, unidades por hora; abajo, minutos por unidad.</div>
-  </div>`
+  </div>`).join('') || `<div class="empty">${(BH.datos || []).length ? 'Nada con este filtro.' : 'No hay datos del Bi-horario en estas fechas.'}</div>`}`
   const recargar = () => { BH.desde = document.getElementById('bh-d').value || BH.desde; BH.hasta = document.getElementById('bh-h').value || BH.hasta; renderDesdeBH() }
   document.getElementById('bh-d').addEventListener('change', recargar)
   document.getElementById('bh-h').addEventListener('change', recargar)
@@ -302,6 +329,8 @@ function bhActualizar(i) {
        ['<b>Tiempo nuevo</b>', `<b>${fmt(f.teNuevo)} min · ${fmt(f.ritmo, 1)}/h</b>`]]
       .map(([k, v]) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px"><span class="muted">${k}</span><span class="mono">${v}</span></div>`).join('')}
     <div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Datos: <b>${f.horas} horas limpias</b> de ${f.personas} personas en ${f.turnos} turnos, del ${fecha(f.primera)} al ${fecha(f.ultima)}.</div>
+    ${f.estado === 'bajar' ? '<div class="banner" style="margin-top:8px">⚠ Producen <b>menos</b> que el estándar: actualizar baja la exigencia y deja como normal el ritmo de hoy. Lo recomendable es cronometrar antes.</div>' : ''}
+    ${f.comoMeta ? '<div class="banner" style="margin-top:8px">⚠ Lo anotado es igual a la meta: puede que el supervisor haya escrito la meta y no lo producido.</div>' : ''}
     ${f.plano ? '<div class="banner" style="margin-top:8px">⚠ Todas las horas tienen el mismo número. Revisa que el supervisor lo haya medido hora por hora antes de actualizar.</div>' : ''}
     ${f.actuales.length > 1 ? `<div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Esta operación tiene ${f.actuales.length} partes en el estudio: se ajustan todas en la misma proporción.</div>` : ''}
     <div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Cambia la meta por hora de esta operación en los turnos nuevos del Bi-horario. Las tomas de cronómetro de esta operación se reemplazan; queda anotado que el tiempo salió del Bi-horario.</div>

@@ -363,3 +363,6 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 .bh-mapa .bh-gcel .bh-u{font-size:14px}
 /* Buscador dentro de un campo de formulario: sin estirarse en alto */
 .field .search{flex:none}
+/* Desde Bi-horario: tablas compactas que caben sin deslizar */
+.mt-bh table{min-width:0;font-size:12.5px}
+.mt-bh th,.mt-bh td{padding:6px 7px}
