@@ -258,6 +258,27 @@ function filasBH() {
       suficiente: d.horas >= BH_MIN_HORAS && d.personas >= BH_MIN_PERS && d.turnos >= BH_MIN_TURNOS, info: codeInfo(d.codigo) }
   })
 }
+// Filas que el admin descartó (código|operación): no vuelven a salir. Se guardan en config.
+async function bhCargarDescartes() {
+  if (BH.descartes) return
+  const { data } = await supabase.from('config').select('valor').eq('clave', 'mt_bh_descartes').maybeSingle()
+  BH.descartes = new Set((data && data.valor) || [])
+}
+async function bhGuardarDescartes() {
+  const { error } = await supabase.from('config').upsert({ clave: 'mt_bh_descartes', valor: [...BH.descartes], updated_at: new Date().toISOString() })
+  if (error) { console.error(error); toast('No se pudo guardar.'); return false }
+  return true
+}
+async function bhDescartar(i) {
+  if (!requireWrite()) return
+  const f = filasBH()[+i]; if (!f) return
+  const k = f.codigo + '|' + f.operacion, volver = BH.descartes.has(k)
+  volver ? BH.descartes.delete(k) : BH.descartes.add(k)
+  if (!(await bhGuardarDescartes())) { volver ? BH.descartes.add(k) : BH.descartes.delete(k); return }
+  const tr = document.querySelector(`[data-act="bhDescartar"][data-arg="${i}"]`)?.closest('tr')
+  if (tr) tr.remove()
+  toast(volver ? `${f.operacion} de ${f.codigo} vuelve a la lista.` : `${f.operacion} de ${f.codigo} descartado. Lo recuperas en el filtro "Descartados".`)
+}
 const BH_ESTADO = {
   sin: ['no', 'Sin estudio', 'No tiene tiempo: con esto lo llenas.'],
   subir: ['si', 'Más rápido', 'Producen más de lo que dice el estándar: conviene actualizar.'],
@@ -274,10 +295,12 @@ async function renderDesdeBH() {
     if (error) { el.innerHTML = '<div class="loading">No se pudo traer el Bi-horario. Revisa la conexión.</div>'; return }
     BH.datos = data; BH.clave = clave
   }
+  await bhCargarDescartes()
   const todas = filasBH()
   const q = BH.q.trim().toLowerCase()
   const accion = f => f.suficiente && (f.estado === 'sin' || f.estado === 'subir')
-  let filas = todas.filter(f => !q || (f.codigo + ' ' + f.operacion + ' ' + (f.info.cliente || '')).toLowerCase().includes(q))
+  const descartada = f => BH.descartes.has(f.codigo + '|' + f.operacion)
+  let filas = todas.filter(f => (BH.ver === 'descartados' ? descartada(f) : !descartada(f)) && (!q || (f.codigo + ' ' + f.operacion + ' ' + (f.info.cliente || '')).toLowerCase().includes(q)))
   if (BH.ver === 'accion') filas = filas.filter(accion)
   if (BH.ver === 'suf') filas = filas.filter(f => f.suficiente)
   // Agrupado por cliente; primero los que tienen más para actualizar.
@@ -300,7 +323,7 @@ async function renderDesdeBH() {
       <label class="muted" style="font-size:13px">Desde <input type="date" id="bh-d" value="${BH.desde}"></label>
       <label class="muted" style="font-size:13px">Hasta <input type="date" id="bh-h" value="${BH.hasta}"></label>
       <select id="bh-crit">${Object.entries(BH_CRIT).map(([k, [t]]) => `<option value="${k}" ${k === BH.crit ? 'selected' : ''}>Criterio: ${t}</option>`).join('')}</select>
-      <select id="bh-ver"><option value="accion" ${BH.ver === 'accion' ? 'selected' : ''}>Para actualizar (sin estudio o más rápido)</option><option value="suf" ${BH.ver === 'suf' ? 'selected' : ''}>Todas con datos suficientes</option><option value="todos" ${BH.ver === 'todos' ? 'selected' : ''}>Todas</option></select>
+      <select id="bh-ver"><option value="accion" ${BH.ver === 'accion' ? 'selected' : ''}>Para actualizar (sin estudio o más rápido)</option><option value="suf" ${BH.ver === 'suf' ? 'selected' : ''}>Todas con datos suficientes</option><option value="todos" ${BH.ver === 'todos' ? 'selected' : ''}>Todas</option><option value="descartados" ${BH.ver === 'descartados' ? 'selected' : ''}>Descartados (${BH.descartes.size})</option></select>
       <input class="search" type="search" id="bh-q" placeholder="Buscar cliente o código…" value="${esc(BH.q)}">
     </div>
     <div class="hint" style="margin-top:-4px">${esc(BH_CRIT[BH.crit][1])}</div>
@@ -320,7 +343,8 @@ async function renderDesdeBH() {
           <div class="muted" style="font-size:11px">${f.teAct ? fmt(f.teAct) + ' → ' : ''}${f.teNuevo ? fmt(f.teNuevo) + ' min' : ''}</div></td>
         <td><span class="pill ${cls}" title="${esc(ayuda)}">${txt}</span>${avisos.length ? `<div style="font-size:11px;color:var(--warn)">⚠ ${esc(avisos.join(' · '))}</div>` : ''}
           <div style="margin-top:4px">${!f.suficiente ? `<span class="pill inc" title="Mínimo ${BH_MIN_HORAS} horas, ${BH_MIN_PERS} personas y ${BH_MIN_TURNOS} turnos">Pocos datos</span>`
-          : f.estado === 'ok' ? '' : `<button class="btn sm ${accion(f) ? 'go' : 'ghost'} admin-only" data-act="bhActualizar" data-arg="${i}">Actualizar</button>`}</div></td></tr>` }).join('')}</tbody>
+          : f.estado === 'ok' || BH.ver === 'descartados' ? '' : `<button class="btn sm ${accion(f) ? 'go' : 'ghost'} admin-only" data-act="bhActualizar" data-arg="${i}">Actualizar</button>`}
+          <button class="btn sm ghost admin-only" style="margin-top:4px" data-act="bhDescartar" data-arg="${i}" title="${BH.ver === 'descartados' ? 'Volver a mostrarla en la lista' : 'No va: quitarla de la lista'}">${BH.ver === 'descartados' ? 'Recuperar' : 'Descartar'}</button></div></td></tr>` }).join('')}</tbody>
     </table></div>
   </div>`).join('') || `<div class="empty">${(BH.datos || []).length ? 'Nada con este filtro.' : 'No hay datos del Bi-horario en estas fechas.'}</div>`}`
   const recargar = () => { BH.desde = document.getElementById('bh-d').value || BH.desde; BH.hasta = document.getElementById('bh-h').value || BH.hasta; renderDesdeBH() }
@@ -339,8 +363,10 @@ function bhActualizar(i) {
     <div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:10px"><b class="mono">${esc(f.codigo)}</b> · ${esc(f.info.cliente || '')}<br><b>${esc(f.operacion)}</b></div>
     ${[['Tiempo actual', f.teAct ? `${fmt(f.teAct)} min · ${fmt(60 / f.teAct, 1)}/h` : 'Sin estudio'],
        [`Bi-horario (${esc(BH_CRIT[BH.crit][0].toLowerCase())})`, `${fmt(f.ritmo, 1)}/h`],
-       ['<b>Tiempo nuevo</b>', `<b>${fmt(f.teNuevo)} min · ${fmt(f.ritmo, 1)}/h</b>`]]
+      ]
       .map(([k, v]) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13.5px"><span class="muted">${k}</span><span class="mono">${v}</span></div>`).join('')}
+    <div class="field" style="margin-top:10px"><label>Unidades por hora a guardar (puedes cambiarlo)</label>
+      <div style="display:flex;align-items:center;gap:10px"><input type="number" id="bh-uph" min="0.1" step="0.1" inputmode="decimal" value="${+f.ritmo.toFixed(1)}" style="width:110px"><span class="mono" id="bh-te"></span></div></div>
     <div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Datos: <b>${f.horas} horas limpias</b> de ${f.personas} personas en ${f.turnos} turnos, del ${fecha(f.primera)} al ${fecha(f.ultima)}.</div>
     ${f.estado === 'bajar' ? '<div class="banner" style="margin-top:8px">⚠ Producen <b>menos</b> que el estándar: actualizar baja la exigencia y deja como normal el ritmo de hoy. Lo recomendable es cronometrar antes.</div>' : ''}
     ${f.comoMeta ? '<div class="banner" style="margin-top:8px">⚠ Lo anotado es igual a la meta: puede que el supervisor haya escrito la meta y no lo producido.</div>' : ''}
@@ -349,9 +375,16 @@ function bhActualizar(i) {
     ${!f.actuales.length ? `<div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Es una operación nueva en este código. El código queda <b>incompleto</b> hasta que entres y confirmes que tiene todas sus operaciones de costura.</div>` : ''}
     <div class="hint" style="color:var(--muted);font-size:12.5px;margin-top:8px">Cambia la meta por hora de esta operación en los turnos nuevos del Bi-horario. Las tomas de cronómetro de esta operación se reemplazan; queda anotado que el tiempo salió del Bi-horario.</div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="bh-ok">Actualizar</button></div>`)
+  const uphIn = document.getElementById('bh-uph'), teOut = document.getElementById('bh-te')
+  const pintarTe = () => { const u = +uphIn.value; teOut.innerHTML = u > 0 ? `= <b>${fmt(60 / u)} min</b> por unidad` : '' }
+  uphIn.addEventListener('input', pintarTe); pintarTe(); setTimeout(() => uphIn.select(), 50)
   document.getElementById('bh-ok').addEventListener('click', async () => {
-    const te = +f.teNuevo.toFixed(3), ts = new Date().toISOString()
-    const base = { obs: te, val: 100, supl: 0, muestras: [], ts, fuente }
+    const u = +uphIn.value
+    if (!(u > 0)) { toast('Escribe las unidades por hora.'); uphIn.focus(); return }
+    const te = +(60 / u).toFixed(3), ts = new Date().toISOString()
+    // Si se escribió otro número, queda anotado que fue a mano.
+    const manual = Math.abs(u - f.ritmo) > 0.05
+    const base = { obs: te, val: 100, supl: 0, muestras: [], ts, fuente: manual ? `Manual: ${fmt(u, 1)} u/h (el Bi-horario sugería ${fmt(f.ritmo, 1)} u/h, ${f.horas} h limpias)` : fuente }
     let rows
     if (f.actuales.length) {
       // Se reparte el tiempo nuevo entre las partes de la operación en la misma proporción.
@@ -892,7 +925,7 @@ document.getElementById('exportBtn').addEventListener('click', exportExcel)
 const ACTIONS = {
   closeModal, backToCodes, imgCostura, openHomologar, addRow, editCodigo, openCrono, verRegistro, delRow, doDelRow,
   verRegToCrono, swRun, swLap, swReset, swSave, swSaveConfirm, swHideConfirm, doHomologarFull, addOneOp, editOp, copyImg, dlImg,
-  bhActualizar, confirmarOps,
+  bhActualizar, bhDescartar, confirmarOps,
 }
 document.addEventListener('click', e => {
   const go = e.target.closest('[data-go]'); if (go) { goCode(go.dataset.go); return }

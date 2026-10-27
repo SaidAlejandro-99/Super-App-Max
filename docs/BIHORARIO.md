@@ -191,3 +191,8 @@ real con el tiempo estándar, y el admin actualiza con un clic.
     marcado `codigos.ops_por_confirmar` y sale **incompleto**.
   - Sigue así hasta que el admin abra el código y toque **"Ya están todas las operaciones"**.
   - El editor muestra qué otras operaciones de costura aparecen en el Bi-horario para ese código.
+- **Unidades a mano y descartar (27-oct):**
+  - Al actualizar, las unidades por hora vienen del Bi-horario, pero el admin puede escribir otro número.
+    - Si lo cambia, en `tiempos.fuente` queda "Manual" junto con lo que sugería el Bi-horario.
+  - **Descartar** quita de la lista una fila que no va (código y operación).
+    - Se guarda en `config.mt_bh_descartes` y se recupera con el filtro "Descartados".
