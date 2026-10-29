@@ -232,3 +232,14 @@ El Excel se lee en el computador y solo se suben las columnas que usa la app. No
   2. Del grupo del supervisor (el grupo es su nombre de pila; MAQ 1 a 4 son de Kewil; FIJO rotan).
   3. De la línea.
   - Las que están en vacaciones, incapacidad o licencia van al final, marcadas.
+- **Referencia por pedido (28-oct):**
+  - "Agregar referencia" pide el **número de pedido** y toma su código.
+  - Si el pedido no está cargado, "Agregar con la referencia" deja escoger el código y guarda el número escrito.
+  - El pedido queda en `bh_hojas.pedido`.
+- **Vista Pedidos:** buscas un pedido y salen todos los turnos donde se trabajó, con lo fabricado
+  (lo reportado al terminar el turno, o la salida si sigue abierto), contra la cantidad del pedido.
+  - Las referencias agregadas antes, sin pedido, cuentan "por código" solo dentro de las fechas
+    del pedido: de 30 días antes de recibirlo a 7 días después de la entrega.
+- **Cargas:**
+  - Si cambian el nombre de la hoja (V3, 2027…), se toma la más nueva; las "VIEJA" no.
+  - Si un archivo trae menos del 70 % de lo que traía la carga anterior, se pregunta antes de reemplazar.

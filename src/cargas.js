@@ -87,11 +87,11 @@ export function init(ctx) { C = ctx }
 const hoyISO = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10) }
 const masDias = (f, n) => { const d = new Date(f + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10) }
 const ARCHIVOS = {
-  pedidos: { titulo: 'Pedidos', archivo: 'PLANNING SUPER SACOS 2026 (.xlsm)', hoja: /BDD ANGIE V2/i,
+  pedidos: { titulo: 'Pedidos', archivo: 'PLANNING SUPER SACOS 2026 (.xlsm)', hoja: /BDD ANGIE/i,
     que: 'Solo los pedidos con código. No se suben precios. En el Bi-horario, el supervisor busca la referencia por número de pedido.' },
-  plan: { titulo: 'Plan de producción', archivo: 'SUPERSACOS (.xlsx)', hoja: /^MAESTRO_PROG$/i,
+  plan: { titulo: 'Plan de producción', archivo: 'SUPERSACOS (.xlsx)', hoja: /^MAESTRO[_ ]?PROG/i,
     que: 'Los pedidos que faltan por entregar: actualiza "Producción futura" y también sirve para buscar por pedido.' },
-  programacion: { titulo: 'Programación del personal', archivo: 'NOVEDADES NÓMINA SUPER SACOS (.xlsx)', hoja: /^PROG\. PERSONAL/i,
+  programacion: { titulo: 'Programación del personal', archivo: 'NOVEDADES NÓMINA SUPER SACOS (.xlsx)', hoja: /^PROG\.? ?PERSONAL/i,
     que: 'Línea, grupo (supervisor) y operación de cada persona, y su turno de hoy a 14 días. Al escoger personas en el Bi-horario salen primero las de esa línea, ese grupo y ese turno.' },
 }
 const leidos = {}
@@ -125,7 +125,9 @@ async function leerArchivo(k, f) {
   try {
     const buf = await f.arrayBuffer()
     const nombres = window.XLSX.read(buf, { type: 'array', bookSheets: true }).SheetNames
-    const hoja = nombres.find(n => ARCHIVOS[k].hoja.test(n.trim()))
+    // Si cambian el nombre de la hoja (V3, 2027…) se toma la del número más alto; las "VIEJA" no.
+    const ultimoNumero = n => +((n.match(/\d+/g) || ['0']).pop())
+    const hoja = nombres.filter(n => ARCHIVOS[k].hoja.test(n.trim()) && !/VIEJ/i.test(n)).sort((a, b) => ultimoNumero(b) - ultimoNumero(a))[0]
     if (!hoja) { info.innerHTML = `No encontré la hoja que necesito en este archivo. ¿Es <b>${C.esc(ARCHIVOS[k].archivo)}</b>?`; return }
     const wb = window.XLSX.read(buf, { type: 'array', cellDates: true, dense: true, sheets: [hoja] })
     const rows = window.XLSX.utils.sheet_to_json(wb.Sheets[hoja], { header: 1, defval: null, blankrows: false })
@@ -161,6 +163,11 @@ async function codigosNuevos(pedidos) {
 async function cargar(k) {
   const r = leidos[k]; if (!r) return
   const info = document.getElementById('cg-info-' + k), ok = document.getElementById('cg-ok-' + k)
+  // Protección: si el archivo trae muchos menos datos que la carga anterior, se pregunta antes.
+  const n = k === 'pedidos' ? r.length : k === 'plan' ? r.pedidos.length : r.personas.filter(p => p.activo).length
+  const { data: prev } = await C.supabase.from('config').select('valor').eq('clave', 'carga_' + k).maybeSingle()
+  const antes = prev && prev.valor && prev.valor.n
+  if (antes && n < antes * 0.7 && !window.confirm(`Este archivo trae ${n} y la carga anterior tenía ${antes}. ¿Seguro que es el archivo correcto?`)) return
   ok.disabled = true; info.textContent = 'Subiendo…'
   try {
     let resumen = ''
@@ -185,7 +192,7 @@ async function cargar(k) {
       await enLotes('programacion', r.turnos)
       resumen = `${C.fmt0(r.personas.filter(p => p.activo).length)} personas activas, ${C.fmt0(r.turnos.length)} turnos programados`
     }
-    await C.supabase.from('config').upsert({ clave: 'carga_' + k, valor: { fecha: new Date().toISOString(), resumen }, updated_at: new Date().toISOString() })
+    await C.supabase.from('config').upsert({ clave: 'carga_' + k, valor: { fecha: new Date().toISOString(), resumen, n }, updated_at: new Date().toISOString() })
     info.innerHTML = `Listo: ${C.esc(resumen)}.`
     C.toast(`${ARCHIVOS[k].titulo}: ${resumen}.`)
     if (C.alCargar) C.alCargar(k)

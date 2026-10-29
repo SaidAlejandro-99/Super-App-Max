@@ -436,19 +436,20 @@ async function pintarLista() {
     const desde = ayer.toISOString().slice(0, 10)
     turnos = (r.data || []).filter(t => t.fecha >= desde)
     viejosAbiertos = (r.data || []).filter(t => t.fecha < desde)
-  } else {
+  } else if (vistaLista !== 'pedidos') {
     const r = await s.from('bh_turnos').select('*').eq('fecha', fechaLista).order('created_at'); turnos = r.data || []; error = r.error
   }
   const dia = await cargarDia(turnos)
   const yo = (C.perfil() || {}).supervisor_cedula
   let pendientes = []
   if (esStaff()) { try { pendientes = await turnosSinTerminar(C.role() === 'admin' ? null : yo) } catch (e) { pendientes = [] } }
-  const tabs = [['turnos', 'Turnos'], ['planta', 'Planta en vivo'], ['personas', 'Personas']]
+  const cuerpoPedidos = vistaLista === 'pedidos' ? await pintarPedidos() : ''
+  const tabs = [['turnos', 'Turnos'], ['planta', 'Planta en vivo'], ['personas', 'Personas'], ['pedidos', 'Pedidos']]
   el.innerHTML = `
   <div class="bh-head">
-    <div><h2>Bi-horario</h2><div class="hint">${vistaLista === 'planta' ? 'Todos los turnos en curso, por línea y operación.' : vistaLista === 'personas' ? 'La eficiencia de cada operario en los turnos del día.' : 'Los turnos del día, ordenados por línea.'}</div></div>
+    <div><h2>Bi-horario</h2><div class="hint">${vistaLista === 'planta' ? 'Todos los turnos en curso, por línea y operación.' : vistaLista === 'personas' ? 'La eficiencia de cada operario en los turnos del día.' : vistaLista === 'pedidos' ? 'Todo lo que se ha fabricado de un pedido.' : 'Los turnos del día, ordenados por línea.'}</div></div>
     <div class="controls" style="margin:0">
-      ${vistaLista !== 'planta' ? `<input type="date" id="bh-fecha" value="${fechaLista}">` : ''}
+      ${vistaLista !== 'planta' && vistaLista !== 'pedidos' ? `<input type="date" id="bh-fecha" value="${fechaLista}">` : ''}
       ${esStaff() ? '<button class="btn go" data-a="nuevoTurno">+ Abrir turno</button>' : ''}
     </div>
   </div>
@@ -457,9 +458,15 @@ async function pintarLista() {
   </nav>
   ${error ? '<div class="banner">Sin señal: no se pudo traer la lista de turnos.</div>' : ''}
   ${C.role() !== 'admin' ? avisoPendientes(pendientes, true) : ''}
-  ${vistaLista === 'planta' ? pintarPlanta(turnos, dia) : vistaLista === 'personas' ? pintarPersonasDia(turnos, dia) : pintarTurnosPorLinea(turnos, dia)}
+  ${vistaLista === 'pedidos' ? cuerpoPedidos : vistaLista === 'planta' ? pintarPlanta(turnos, dia) : vistaLista === 'personas' ? pintarPersonasDia(turnos, dia) : pintarTurnosPorLinea(turnos, dia)}
   ${C.role() === 'admin' ? resumenPendientesAdmin(pendientes) : ''}`
   const f = document.getElementById('bh-fecha'); if (f) f.addEventListener('change', e => { fechaLista = e.target.value || hoyISO(); pintarLista() })
+  const bp = document.getElementById('bh-ped'); if (bp) {
+    const buscar = () => { pedidoBuscado = bp.value.trim(); pintarLista() }
+    bp.addEventListener('keydown', e => { if (e.key === 'Enter') buscar() })
+    document.getElementById('bh-ped-ok').addEventListener('click', buscar)
+    if (!pedidoBuscado) setTimeout(() => bp.focus(), 50)
+  }
   el.querySelectorAll('[data-filtro]').forEach(x => x.addEventListener('change', e => { filtroPers[x.dataset.filtro] = e.target.value; pintarLista() }))
 }
 
@@ -574,6 +581,66 @@ function pintarPersonasDia(turnos, dia) {
       <td><div class="bh-efbar"><i class="${efClase(p.ef)}" style="width:${Math.min(100, Math.round((p.ef || 0) * 100))}%"></i><b class="${efClase(p.ef)}">${pct(p.ef)}</b></div></td></tr>`).join('') || '<tr><td colspan="7" class="empty">No hay personas en los turnos de este día.</td></tr>'}</tbody>
   </table></div>
   <div class="count">Eficiencia del día: lo que hizo cada persona frente a su meta, en el tiempo que tuvo disponible, sumando todos sus turnos y operaciones. Toca el nombre para abrir su Mi Marcador.</div></div>`
+}
+
+/* ---------- vista Pedidos: todo lo fabricado de un pedido ---------- */
+// Cuenta las referencias que se agregaron con ese pedido. Las que se agregaron antes
+// (sin pedido anotado) se suman si tienen el mismo código, marcadas como "por código".
+// Fabricado = lo reportado al terminar el turno; si sigue abierto, la salida (pegue tapa/solapa).
+let pedidoBuscado = ''
+async function pintarPedidos() {
+  const q = pedidoBuscado
+  const buscador = `<div class="controls"><input class="search" type="search" id="bh-ped" inputmode="numeric" placeholder="Número de pedido (ej: 8868)" value="${C.esc(q)}" style="max-width:260px"><button class="btn go" id="bh-ped-ok">Buscar</button></div>`
+  if (!/^\d{3,}/.test(q)) return buscador + '<div class="hint">Escribe el número del pedido y dale Buscar.</div>'
+  await cargarPedidos()
+  const peds = PEDIDOS.filter(x => x.planeador.startsWith(q) || x.pedido === q)
+  const codigos = [...new Set(peds.map(p => p.codigo))]
+  const s = C.supabase
+  const [a, b] = await Promise.all([
+    s.from('bh_hojas').select('*').like('pedido', q + '%'),
+    codigos.length ? s.from('bh_hojas').select('*').is('pedido', null).in('codigo', codigos) : Promise.resolve({ data: [] }),
+  ])
+  let hojas = [...(a.data || []).map(h => ({ ...h, via: 'pedido' })), ...(b.data || []).map(h => ({ ...h, via: 'codigo' }))]
+  if (!hojas.length && !peds.length) return buscador + `<div class="empty">No encontramos el pedido <b>${C.esc(q)}</b> ni referencias del Bi-horario con ese pedido.</div>`
+  const ids = [...new Set(hojas.map(h => h.turno_id))]
+  const { data: ts } = ids.length ? await s.from('bh_turnos').select('*').in('id', ids) : { data: [] }
+  // Por código solo cuenta lo fabricado en las fechas del pedido: desde 30 días antes de
+  // recibirlo hasta 7 días después de la entrega (así no se suma producción de otro pedido).
+  const dentro = t => peds.some(p => {
+    const d = (f, n) => { const x = new Date(f + 'T12:00:00'); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10) }
+    return (!p.recibido || t.fecha >= d(p.recibido, -30)) && (!p.entrega || t.fecha <= d(p.entrega, 7))
+  })
+  const turnoDe = new Map((ts || []).map(t => [t.id, t]))
+  hojas = hojas.filter(h => h.via === 'pedido' || (turnoDe.get(h.turno_id) && dentro(turnoDe.get(h.turno_id))))
+  const dia = await cargarDia(ts || [])
+  const filas = hojas.map(h => {
+    const X = dia.get(h.turno_id); if (!X) return null
+    const bloques = X.bloques.filter(x => x.hoja_id === h.id)
+    const salida = bloques.filter(x => esSalida(x.operacion)).reduce((sum, x) => sum + resumenBloque(x, X).total, 0)
+    let esp = 0, tot = 0
+    bloques.forEach(x => { const r = resumenBloque(x, X); if (x.meta_origen !== 'turno' && r.esperado) { esp += r.esperado; tot += r.total } })
+    const fabricado = h.unidades_reportadas != null ? +h.unidades_reportadas : null
+    return { h, t: X.turno, fabricado, salida, ef: esp ? tot / esp : null, cuenta: fabricado != null ? fabricado : salida }
+  }).filter(Boolean).sort((x, y) => x.t.fecha.localeCompare(y.t.fecha) || ordenTurno(x.t.turno) - ordenTurno(y.t.turno))
+  const total = filas.reduce((sum, f) => sum + f.cuenta, 0)
+  const pedido = peds.reduce((sum, p) => sum + (+p.cantidad || 0), 0)
+  return buscador + `
+  ${peds.length ? `<div class="hint">${peds.map(p => `Pedido <b class="mono">${C.esc(p.planeador)}</b> · ${C.esc(p.cliente)} · <span class="mono">${C.esc(p.codigo)}</span>${p.cantidad ? ` · <b>${C.fmt0(p.cantidad)}</b> und` : ''}`).join('<br>')}</div>`
+    : `<div class="hint">El pedido <b>${C.esc(q)}</b> no está en los pedidos cargados; se muestra lo que se anotó con ese número.</div>`}
+  <div class="grid kpis" style="margin:10px 0 12px">
+    <div class="kpi good"><div class="label">Fabricado</div><div class="value">${C.fmt0(total)}</div><div class="sub">${pedido ? `de ${C.fmt0(pedido)} · ${Math.round(100 * total / pedido)}%` : ''}</div></div>
+    <div class="kpi"><div class="label">Pendiente</div><div class="value">${pedido ? C.fmt0(Math.max(0, pedido - total)) : '—'}</div></div>
+    <div class="kpi"><div class="label">Turnos</div><div class="value">${new Set(filas.map(f => f.t.id)).size}</div></div>
+  </div>
+  <div class="section" style="padding:10px"><div class="tablebox"><table>
+    <thead><tr><th>Fecha</th><th>Turno</th><th>Línea</th><th>Supervisor</th><th>Referencia</th><th class="num">Fabricado</th><th class="num">Efic.</th></tr></thead>
+    <tbody>${filas.map(f => `<tr class="linkish" data-a="abrir" data-id="${f.t.id}" title="Abrir el turno">
+      <td>${fechaTxt(f.t.fecha)}</td><td>${C.esc(f.t.turno)}</td><td>${C.esc(lineaTxt(f.t.linea))}</td><td class="muted">${C.esc(supNombre(f.t.supervisor_cedula))}</td>
+      <td class="mono" style="font-size:12px">${C.esc(f.h.codigo)}${f.h.via === 'codigo' ? ' <span class="pill man" title="Se agregó sin pedido: se cuenta por tener el mismo código">por código</span>' : ''}</td>
+      <td class="num"><b>${C.fmt0(f.cuenta)}</b>${f.fabricado == null ? '<div class="muted" style="font-size:11px">en curso (salida)</div>' : ''}</td>
+      <td class="num ${efClase(f.ef)}">${pct(f.ef)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">Todavía no se ha fabricado nada de este pedido en el Bi-horario.</td></tr>'}</tbody>
+  </table></div>
+  <div class="count">Fabricado: lo que se reportó al terminar cada turno; si el turno sigue abierto, la salida (pegue tapa o solapa). Toca una fila para abrir el turno.</div></div>`
 }
 
 /* ---------- turnos sin terminar ---------- */
@@ -698,7 +765,7 @@ function pintarTurno() {
   <div class="bh-hojas">
     ${T.hojas.length ? `<button class="bh-hoja vista ${vistaTurno === 'general' ? 'on' : ''}" data-a="vistaGeneral"><b>▦ Vista general</b><span>Todo el turno por operación</span></button>` : ''}
     ${T.asig.length ? `<button class="bh-hoja vista ${vistaTurno === 'personas' ? 'on' : ''}" data-a="vistaPersonas"><b>% Eficiencia por persona</b><span>Cómo va cada operario</span></button>` : ''}
-    ${T.hojas.map((h, i) => { const c = C.m1.codeInfo(h.codigo); return `<button class="bh-hoja ${vistaTurno === 'hojas' && h.id === hojaActual ? 'on' : ''}" data-a="hoja" data-id="${h.id}" style="border-left:4px solid ${COLORES[i % COLORES.length]}"><b class="mono">${C.esc(h.codigo)}</b><span>${C.esc(c.cliente || '')}</span></button>` }).join('')}
+    ${T.hojas.map((h, i) => { const c = C.m1.codeInfo(h.codigo); return `<button class="bh-hoja ${vistaTurno === 'hojas' && h.id === hojaActual ? 'on' : ''}" data-a="hoja" data-id="${h.id}" style="border-left:4px solid ${COLORES[i % COLORES.length]}"><b class="mono">${C.esc(h.codigo)}</b><span>${C.esc(c.cliente || '')}${h.pedido ? ` · Pedido ${C.esc(h.pedido)}` : ''}</span></button>` }).join('')}
     ${ed ? '<button class="bh-hoja add" data-a="referencia">+ Referencia</button>' : ''}
   </div>
   ${vistaTurno === 'personas' && T.asig.length ? pintarPersonas()
@@ -1149,7 +1216,7 @@ async function cargarPedidos() {
   if (PEDIDOS) return PEDIDOS
   const out = []
   for (let desde = 0; ; desde += 1000) {
-    const { data, error } = await C.supabase.from('pedidos').select('planeador, pedido, codigo, cliente, cantidad, saldo, origen').range(desde, desde + 999)
+    const { data, error } = await C.supabase.from('pedidos').select('planeador, pedido, codigo, cliente, cantidad, saldo, origen, recibido, entrega').range(desde, desde + 999)
     if (error || !data) break
     out.push(...data); if (data.length < 1000) break
   }
@@ -1159,33 +1226,54 @@ async function cargarPedidos() {
   return PEDIDOS
 }
 
+// Agregar referencia: se busca por número de pedido (pedidos cargados en Cargar archivos).
+// Si el pedido no está, se agrega con la referencia y queda anotado el número que escribieron.
+// Cambiar el código de una referencia que ya existe sí busca por código.
 function modalReferencia(hojaEditar) {
   const cods = C.m1.codigos()
   const he = hojaEditar ? T.hojas.find(h => h.id === hojaEditar) : null
+  let modo = he ? 'codigo' : 'pedido', pedidoManual = ''
   C.openModal(`<h3>${he ? 'Cambiar código de la referencia' : 'Agregar referencia'}</h3>
-    <div class="hint" style="color:var(--muted);font-size:12.5px">${he ? `Hoy es <b class="mono">${C.esc(he.codigo)}</b>. Se conservan las operaciones, personas y horas registradas; las metas de Métodos y Tiempos se recalculan con el código nuevo.`
-      : 'El código del saco que se va a trabajar. Si cambian de referencia en el turno, se agrega otra.'}</div>
-    <input class="search" style="width:100%;margin-top:10px" type="search" id="rf-q" placeholder="Buscar código, cliente o número de pedido…" autocomplete="off">
+    <div class="hint" id="rf-hint" style="color:var(--muted);font-size:12.5px"></div>
+    <input class="search" style="width:100%;margin-top:10px" type="search" id="rf-q" autocomplete="off">
     <div class="hlist" id="rf-res"></div>`, true)
   const linea = T.turno.linea
+  const pillTiempos = cod => C.m1.tiemposOf(cod).length ? '<span class="pill si">Con tiempos</span>' : '<span class="pill no">Sin estudio</span>'
+  const ponerModo = m => {
+    modo = m
+    const q = document.getElementById('rf-q')
+    q.value = ''; q.inputMode = m === 'pedido' ? 'numeric' : 'text'
+    q.placeholder = m === 'pedido' ? 'Número de pedido (ej: 8868)' : 'Buscar código o cliente…'
+    document.getElementById('rf-hint').innerHTML = he ? `Hoy es <b class="mono">${C.esc(he.codigo)}</b>. Se conservan las operaciones, personas y horas registradas; las metas de Métodos y Tiempos se recalculan con el código nuevo.`
+      : m === 'pedido' ? 'Escribe el <b>número de pedido</b> que se va a trabajar. Si cambian de pedido en el turno, se agrega otra referencia.'
+      : `El pedido <b>${C.esc(pedidoManual || '—')}</b> no está cargado: escoge la referencia (código del saco). El número de pedido queda anotado.`
+    draw(''); setTimeout(() => q.focus(), 50)
+  }
   const draw = q => {
-    const n = q.trim().toLowerCase()
+    const n = q.trim().toLowerCase(), res = document.getElementById('rf-res')
+    if (modo === 'pedido') {
+      if (!PEDIDOS) { res.innerHTML = '<div class="muted" style="padding:10px">Cargando pedidos…</div>'; return }
+      const peds = /^\d{3,}/.test(n) ? PEDIDOS.filter(x => x.planeador.startsWith(n) || x.pedido === n).slice(0, 15) : []
+      res.innerHTML = peds.length ? `<table><tbody>${peds.map(x => `<tr>
+        <td><b class="mono">${C.esc(x.planeador)}</b><div class="muted" style="font-size:11px">${x.cantidad ? C.fmt0(x.cantidad) + ' und' : ''}</div></td>
+        <td class="codecell">${C.esc(x.codigo)}<div class="muted" style="font-size:11px">${C.esc(x.cliente)}</div></td>
+        <td>${pillTiempos(x.codigo)}</td>
+        <td><button class="btn sm go" data-ref="${C.esc(x.codigo)}" data-ped="${C.esc(x.planeador)}">Elegir</button></td></tr>`).join('')}</tbody></table>`
+        : /^\d{3,}/.test(n) ? `<div class="empty" style="padding:14px">No encontramos el pedido <b>${C.esc(q.trim())}</b>.<div style="margin-top:10px"><button class="btn go" id="rf-manual">Agregar con la referencia</button></div></div>`
+        : '<div class="muted" style="padding:10px">Escribe al menos 3 números del pedido.</div>'
+      const bm = document.getElementById('rf-manual'); if (bm) bm.addEventListener('click', () => { pedidoManual = q.trim(); ponerModo('codigo') })
+      return
+    }
     const lista = cods.filter(c => !n || (c.codigo + ' ' + c.cliente + ' ' + (c.descripcion || '')).toLowerCase().includes(n))
       .sort((a, b) => (b.linea && linea.startsWith(b.linea) ? 1 : 0) - (a.linea && linea.startsWith(a.linea) ? 1 : 0)).slice(0, 120)
-    // Si escriben un número de pedido (3 dígitos o más), arriba salen los pedidos que coinciden con su código.
-    const peds = /^\d{3,}/.test(n) && PEDIDOS ? PEDIDOS.filter(x => x.planeador.startsWith(n) || x.pedido === n).slice(0, 12) : []
-    document.getElementById('rf-res').innerHTML = `<table><tbody>${peds.map(x => `<tr>
-      <td class="codecell">${C.esc(x.codigo)}<div class="muted" style="font-size:11px">Pedido <b>${C.esc(x.planeador)}</b>${x.cantidad ? ' · ' + C.fmt0(x.cantidad) + ' und' : ''}</div></td>
-      <td class="muted" style="font-size:12px">${C.esc(x.cliente)}</td>
-      <td>${C.m1.tiemposOf(x.codigo).length ? '<span class="pill si">Con tiempos</span>' : '<span class="pill no">Sin estudio</span>'}</td>
-      <td><button class="btn sm go" data-ref="${C.esc(x.codigo)}">Elegir</button></td></tr>`).join('')}${lista.map(c => `<tr>
+    res.innerHTML = `<table><tbody>${lista.map(c => `<tr>
       <td class="codecell">${C.esc(c.codigo)}</td><td class="muted" style="font-size:12px">${C.esc(c.cliente)}</td>
-      <td>${C.m1.tiemposOf(c.codigo).length ? '<span class="pill si">Con tiempos</span>' : '<span class="pill no">Sin estudio</span>'}</td>
-      <td><button class="btn sm go" data-ref="${C.esc(c.codigo)}">Elegir</button></td></tr>`).join('') || (peds.length ? '' : '<tr><td class="empty">Sin resultados</td></tr>')}</tbody></table>`
+      <td>${pillTiempos(c.codigo)}</td>
+      <td><button class="btn sm go" data-ref="${C.esc(c.codigo)}" data-ped="${C.esc(pedidoManual)}">Elegir</button></td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
   }
-  draw('')
+  ponerModo(modo)
   document.getElementById('rf-q').addEventListener('input', e => draw(e.target.value))
-  cargarPedidos().then(() => { const q = document.getElementById('rf-q'); if (q && q.value) draw(q.value) }).catch(() => {})
+  cargarPedidos().then(() => { const q = document.getElementById('rf-q'); if (q) draw(q.value) }).catch(() => {})
   document.getElementById('rf-res').addEventListener('click', e => {
     const x = e.target.closest('[data-ref]'); if (!x) return
     if (he) {
@@ -1203,7 +1291,7 @@ function modalReferencia(hojaEditar) {
       C.toast(sinEstudio.length ? `Código cambiado. Sin estudio en el código nuevo (quedan con meta manual): ${sinEstudio.join(', ')}.` : 'Código cambiado.')
       return
     }
-    const fila = { id: uid(), turno_id: T.turno.id, codigo: x.dataset.ref, orden: T.hojas.length }
+    const fila = { id: uid(), turno_id: T.turno.id, codigo: x.dataset.ref, pedido: x.dataset.ped || null, orden: T.hojas.length }
     cambio('bh_hojas', 'upsert', fila)
     hojaActual = fila.id; vistaTurno = 'hojas'
     C.closeModal(); pintarTurno()
