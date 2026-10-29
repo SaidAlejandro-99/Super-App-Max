@@ -456,8 +456,9 @@ async function pintarLista() {
     ${tabs.map(([v, txt]) => `<button aria-selected="${vistaLista === v}" data-a="vistaLista" data-v="${v}">${txt}</button>`).join('')}
   </nav>
   ${error ? '<div class="banner">Sin señal: no se pudo traer la lista de turnos.</div>' : ''}
-  ${avisoPendientes(pendientes, C.role() !== 'admin')}
-  ${vistaLista === 'planta' ? pintarPlanta(turnos, dia) : vistaLista === 'personas' ? pintarPersonasDia(turnos, dia) : pintarTurnosPorLinea(turnos, dia)}`
+  ${C.role() !== 'admin' ? avisoPendientes(pendientes, true) : ''}
+  ${vistaLista === 'planta' ? pintarPlanta(turnos, dia) : vistaLista === 'personas' ? pintarPersonasDia(turnos, dia) : pintarTurnosPorLinea(turnos, dia)}
+  ${C.role() === 'admin' ? resumenPendientesAdmin(pendientes) : ''}`
   const f = document.getElementById('bh-fecha'); if (f) f.addEventListener('change', e => { fechaLista = e.target.value || hoyISO(); pintarLista() })
   el.querySelectorAll('[data-filtro]').forEach(x => x.addEventListener('change', e => { filtroPers[x.dataset.filtro] = e.target.value; pintarLista() }))
 }
@@ -596,6 +597,15 @@ function avisoPendientes(ts, propios) {
   if (!ts.length) return ''
   return `<div class="banner bh-pend"><b>${propios ? `Tienes ${ts.length} turno${ts.length > 1 ? 's' : ''} sin terminar` : `Hay ${ts.length} turno${ts.length > 1 ? 's' : ''} sin terminar`}.</b> ${MSG_RAPIDO}
     <div class="controls" style="margin:8px 0 0">${listaPendientes(ts, !propios)}</div></div>`
+}
+
+// Para el admin: un resumen corto al final (cuántos y de quién), que se abre al tocarlo.
+function resumenPendientesAdmin(ts) {
+  if (!ts.length) return ''
+  const porSup = new Map()
+  ts.forEach(t => { const k = supNombre(t.supervisor_cedula) || 'Sin supervisor'; porSup.set(k, (porSup.get(k) || 0) + 1) })
+  return `<details class="bh-pend-res"><summary><b>${ts.length}</b> turno${ts.length > 1 ? 's' : ''} sin terminar · ${[...porSup.entries()].sort((a, b) => b[1] - a[1]).map(([n, c]) => `${C.esc(n)} ${c}`).join(' · ')}</summary>
+    <div class="controls" style="margin:8px 0 0">${listaPendientes(ts, true)}</div></details>`
 }
 
 function modalNuevoTurno() {

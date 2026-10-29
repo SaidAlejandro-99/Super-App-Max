@@ -382,3 +382,6 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 .bh-planta-k b{color:var(--fg)}
 @media (max-width:640px){.bh-linea{grid-template-columns:1fr}.bh-linea-t{padding-top:0}}
 .bh-planta .bh-mapa{margin:0;border:none;padding:0!important;background:none;box-shadow:none}
+.bh-pend-res{margin-top:16px;font-size:12.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
+.bh-pend-res summary{cursor:pointer}
+.bh-pend-res summary b{color:var(--warn)}
