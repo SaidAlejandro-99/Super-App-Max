@@ -380,7 +380,7 @@ async function cargarDia(turnos) {
   rg.data.forEach(r => { const X = m.get(r.turno_id); if (X) X.regs.set(r.asignacion_id + '|' + r.hora, r) })
   return m
 }
-// Datos que resumen un turno (tarjetas y Planta en vivo).
+// Datos que resumen un turno (tarjetas y Vista general del día).
 function datosTurno(X) {
   if (esPT(X.turno.linea)) { const r = resumenPT(X); return { pt: r, ef: r.ef, personas: r.personas.length, tm: r.fuera } }
   const { horas, lista } = resumenOperaciones(X)
@@ -412,7 +412,7 @@ function resumenTarjeta(X) {
     ${d.cuello && t.estado === 'abierto' ? `<div class="bh-card-cuello">Cuello: ${C.esc(d.cuello.operacion)} (${C.fmt0(d.cuello.total)})</div>` : ''}`
 }
 
-// La lista tiene tres vistas: turnos por línea, Planta en vivo (todo lo abierto) y Personas (eficiencia del día).
+// La lista tiene tres vistas: turnos por línea, Vista general del día, Personas (eficiencia del día) y Pedidos.
 let vistaLista = 'turnos', filtroEstado = 'todos', viejosAbiertos = []
 const filtroPers = { linea: '', sup: '', orden: 'mejor' }
 const ordenLinea = l => { const i = LINEAS.findIndex(x => x.v === l); return i < 0 ? 99 : i }
@@ -428,15 +428,8 @@ async function pintarLista() {
   el.innerHTML = '<div class="loading">Cargando…</div>'
   const s = C.supabase
   let turnos = [], error = null
-  if (vistaLista === 'planta') {
-    // Todo lo que está en curso, aunque haya empezado ayer (turnos de noche).
-    // Solo los de hoy y los de noche de ayer; los de días anteriores sin terminar se avisan aparte.
-    const ayer = new Date(hoyISO() + 'T12:00:00'); ayer.setDate(ayer.getDate() - 1)
-    const r = await s.from('bh_turnos').select('*').eq('estado', 'abierto').order('fecha'); error = r.error
-    const desde = ayer.toISOString().slice(0, 10)
-    turnos = (r.data || []).filter(t => t.fecha >= desde)
-    viejosAbiertos = (r.data || []).filter(t => t.fecha < desde)
-  } else if (vistaLista !== 'pedidos') {
+  // Turnos, Vista general y Personas muestran los turnos de la fecha escogida.
+  if (vistaLista !== 'pedidos') {
     const r = await s.from('bh_turnos').select('*').eq('fecha', fechaLista).order('created_at'); turnos = r.data || []; error = r.error
   }
   const dia = await cargarDia(turnos)
@@ -444,12 +437,12 @@ async function pintarLista() {
   let pendientes = []
   if (esStaff()) { try { pendientes = await turnosSinTerminar(C.role() === 'admin' ? null : yo) } catch (e) { pendientes = [] } }
   const cuerpoPedidos = vistaLista === 'pedidos' ? await pintarPedidos() : ''
-  const tabs = [['turnos', 'Turnos'], ['planta', 'Planta en vivo'], ['personas', 'Personas'], ['pedidos', 'Pedidos']]
+  const tabs = [['turnos', 'Turnos'], ['planta', 'Vista general del día'], ['personas', 'Personas'], ['pedidos', 'Pedidos']]
   el.innerHTML = `
   <div class="bh-head">
-    <div><h2>Bi-horario</h2><div class="hint">${vistaLista === 'planta' ? 'Todos los turnos en curso, por línea y operación.' : vistaLista === 'personas' ? 'La eficiencia de cada operario en los turnos del día.' : vistaLista === 'pedidos' ? 'Todo lo que se ha fabricado de un pedido.' : 'Los turnos del día, ordenados por línea.'}</div></div>
+    <div><h2>Bi-horario</h2><div class="hint">${vistaLista === 'planta' ? 'Todos los turnos del día, por línea, cada operación hora a hora.' : vistaLista === 'personas' ? 'La eficiencia de cada operario en los turnos del día.' : vistaLista === 'pedidos' ? 'Todo lo que se ha fabricado de un pedido.' : 'Los turnos del día, ordenados por línea.'}</div></div>
     <div class="controls" style="margin:0">
-      ${vistaLista !== 'planta' && vistaLista !== 'pedidos' ? `<input type="date" id="bh-fecha" value="${fechaLista}">` : ''}
+      ${vistaLista !== 'pedidos' ? `<input type="date" id="bh-fecha" value="${fechaLista}">` : ''}
       ${esStaff() ? '<button class="btn go" data-a="nuevoTurno">+ Abrir turno</button>' : ''}
     </div>
   </div>
@@ -488,17 +481,16 @@ function pintarTurnosPorLinea(turnos, dia) {
   </div>`).join('') || `<div class="empty">No hay turnos ${filtroEstado === 'curso' ? 'en curso' : filtroEstado === 'terminados' ? 'terminados' : ''} el ${fechaTxt(fechaLista)}.</div>`}`
 }
 
-// Planta en vivo: todos los turnos abiertos, por línea, con cada operación.
+// Vista general del día: todos los turnos de la fecha, por línea, cada operación hora a hora.
 function pintarPlanta(turnos, dia) {
-  // Los turnos de días anteriores sin terminar ya salen en el aviso de arriba (turnos sin terminar).
   const aviso = ''
-  if (!turnos.length) return '<div class="empty">No hay turnos en curso en este momento.</div>' + aviso
+  if (!turnos.length) return `<div class="empty">No hay turnos el ${fechaTxt(fechaLista)}.</div>`
   const todos = turnos.map(t => dia.get(t.id)).filter(Boolean)
   let esp = 0, tot = 0
   todos.forEach(X => { if (!esPT(X.turno.linea)) resumenOperaciones(X).lista.forEach(o => { if (!o.turnoMeta && o.conMeta) { esp += o.esperado; tot += o.total } }) })
   return `
   <div class="grid kpis" style="margin-bottom:12px">
-    <div class="kpi"><div class="label">Turnos en curso</div><div class="value">${turnos.length}</div></div>
+    <div class="kpi"><div class="label">Turnos</div><div class="value">${turnos.length}</div><div class="sub">${turnos.filter(t => t.estado === 'abierto').length} en curso</div></div>
     <div class="kpi"><div class="label">Personas</div><div class="value">${new Set(todos.flatMap(X => esPT(X.turno.linea) ? (X.ptp || []).map(p => p.cedula) : X.asig.map(a => a.cedula))).size}</div></div>
     <div class="kpi"><div class="label">Eficiencia de la planta</div><div class="value ${efClase(esp ? tot / esp : null)}">${pct(esp ? tot / esp : null)}</div></div>
   </div>
@@ -506,7 +498,7 @@ function pintarPlanta(turnos, dia) {
     const X = dia.get(t.id); if (!X) return ''
     const d = datosTurno(X)
     const cab = `<div class="bh-planta-h" data-a="abrir" data-id="${t.id}" title="Abrir el turno">
-      <div><b>${C.esc(lineaTxt(linea))}</b> · ${C.esc(turnoTxt(t.turno))} <span class="muted">· ${C.esc(supNombre(t.supervisor_cedula) || 'Sin supervisor')}${t.fecha !== hoyISO() ? ' · empezó ' + fechaTxt(t.fecha) : ''}</span></div>
+      <div><b>${C.esc(lineaTxt(linea))}</b> · ${C.esc(turnoTxt(t.turno))} <span class="muted">· ${C.esc(supNombre(t.supervisor_cedula) || 'Sin supervisor')}</span> <span class="pill ${t.estado === 'abierto' ? 'si' : 'man'}">${t.estado === 'abierto' ? 'En curso' : 'Terminado'}</span></div>
       <div class="bh-planta-k"><span>Efic. <b class="${efClase(d.ef)}">${pct(d.ef)}</b></span><span>${d.personas} pers.</span><span>${d.pt ? 'Fuera ' + (d.tm || 0) + ' min' : 'TM ' + tmTxt(d)}</span><span class="linkish">Abrir →</span></div></div>`
     if (d.pt) return `<div class="section bh-planta">${cab}
       <div class="tablebox"><table><thead><tr><th>Persona</th><th class="num">Hizo</th><th class="num">En el proceso</th><th class="num">Efic.</th></tr></thead><tbody>

@@ -202,7 +202,7 @@ real con el tiempo estándar, y el admin actualiza con un clic.
 - Tres vistas arriba:
   - **Turnos:** por línea, en orden fijo, con los turnos de cada línea lado a lado
     por hora. Filtro: todos, en curso o terminados.
-  - **Planta en vivo:** todos los turnos abiertos de hoy y de ayer, por línea y
+  - **Vista general del día:** todos los turnos de la fecha escogida (en curso y terminados), por línea y
     operación (llevan, esperado, eficiencia, personas, hasta qué hora y cuello).
     - Los turnos de días anteriores que no se terminaron se avisan aparte.
   - **Personas:** eficiencia del día de cada operario, sumando todos sus turnos y
