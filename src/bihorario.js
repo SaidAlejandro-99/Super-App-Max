@@ -504,7 +504,7 @@ function pintarPlanta(turnos, dia) {
     const colorHoja = new Map(X.hojas.map((h, k) => [h.id, COLORES[k % COLORES.length]]))
     const filas = d.lista.map(o => ({ ...o, personas: o.personas.size, cuello: d.cuello && d.cuello.operacion === o.operacion }))
     return `<div class="section bh-planta">${cab}
-      ${X.hojas.length > 1 ? `<div class="bh-leyenda" style="margin-bottom:6px">${X.hojas.map(h => `<span><i style="background:${colorHoja.get(h.id)}"></i>${C.esc(h.codigo)} · ${C.esc(C.m1.codeInfo(h.codigo).cliente || '')}</span>`).join('')}</div>` : ''}
+      ${X.hojas.length ? `<div class="bh-leyenda" style="margin-bottom:6px">${X.hojas.map(h => `<span><i style="background:${colorHoja.get(h.id)}"></i>${C.esc(h.codigo)} · ${C.esc(C.m1.codeInfo(h.codigo).cliente || '')}</span>`).join('')}</div>` : ''}
       ${filas.length ? tablaMapa(filas, d.horas, colorHoja, false) : '<div class="empty">Aún no hay operaciones.</div>'}</div>`
   }).join('')).join('')}${aviso}`
 }
@@ -1144,11 +1144,19 @@ function modalOperacion(bloqueId) {
   const resto = C.m1.opList().map(o => o.nombre).filter(n => !delCodigo.includes(n))
   // Las operaciones que ya están en esta referencia no se repiten (salvo la que se está editando).
   const ya = new Set(T.bloques.filter(x => x.hoja_id === hoja.id && (!b || x.id !== b.id)).map(x => x.operacion))
+  delCodigo.sort((x, y) => (tipo(x) === 'Costura' ? 0 : 1) - (tipo(y) === 'Costura' ? 0 : 1))
+  // Se puede escribir para buscar: la lista se filtra (sin importar tildes ni mayúsculas).
+  const sinTilde = t => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  const opciones = filtro => {
+    const f = sinTilde(filtro || ''), ok = n => !f || sinTilde(n).includes(f)
+    const d = delCodigo.filter(ok), r = resto.filter(ok)
+    return (d.length ? `<optgroup label="De esta referencia (con meta de Métodos y Tiempos)">${d.map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>` : '')
+      + (r.length ? `<optgroup label="Otras operaciones (meta manual)">${r.map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>` : '')
+  }
   C.openModal(`<h3>${b ? 'Editar operación' : 'Agregar operación'}</h3>
-    <div class="field"><label>Operación</label><select id="op-sel">
-      ${delCodigo.length ? `<optgroup label="De esta referencia (con meta de Métodos y Tiempos)">${delCodigo.sort((x, y) => (tipo(x) === 'Costura' ? 0 : 1) - (tipo(y) === 'Costura' ? 0 : 1)).map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>` : ''}
-      <optgroup label="Otras operaciones (meta manual)">${resto.map(n => `<option ${ya.has(n) ? 'disabled' : ''}>${C.esc(n)}</option>`).join('')}</optgroup>
-    </select></div>
+    <div class="field"><label>Operación</label>
+      <input type="search" id="op-q" class="search" style="width:100%;margin-bottom:6px" placeholder="Escribe para buscar (ej: tapa, reata, cierre)…" autocomplete="off">
+      <select id="op-sel" size="6" style="width:100%">${opciones('')}</select></div>
     ${b ? '<div class="hint" style="color:var(--muted);font-size:12px;margin:-4px 0 10px">Si cambias la operación, las personas y sus horas registradas pasan a la nueva.</div>' : ''}
     <div class="field"><label>Meta (obligatoria)</label><div class="bh-chips" id="op-tipo"></div></div>
     <div class="field" id="op-metabox"><label>Meta por hora (sacos)</label><input type="number" id="op-meta" min="0" step="0.1" inputmode="decimal" placeholder="Ej: 25"></div>
@@ -1180,6 +1188,16 @@ function modalOperacion(bloqueId) {
   if (b) sel.value = b.operacion
   else { const primera = [...sel.options].find(o => !o.disabled); if (primera) sel.value = primera.value }
   sel.addEventListener('change', () => refrescar(true))
+  const q = document.getElementById('op-q')
+  q.addEventListener('input', () => {
+    const antes = sel.value
+    sel.innerHTML = opciones(q.value)
+    const sigue = [...sel.options].find(o => o.value === antes && !o.disabled)
+    const primera = sigue || [...sel.options].find(o => !o.disabled)
+    sel.value = primera ? primera.value : ''
+    if (sel.value !== antes) refrescar(true)
+  })
+  if (!b) setTimeout(() => q.focus(), 50)
   refrescar(false)
   document.getElementById('op-ok').addEventListener('click', () => {
     const nombre = op(); if (!nombre) { C.toast('Elige la operación.'); return }
