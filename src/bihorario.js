@@ -440,6 +440,9 @@ async function pintarLista() {
     const r = await s.from('bh_turnos').select('*').eq('fecha', fechaLista).order('created_at'); turnos = r.data || []; error = r.error
   }
   const dia = await cargarDia(turnos)
+  const yo = (C.perfil() || {}).supervisor_cedula
+  let pendientes = []
+  if (esStaff()) { try { pendientes = await turnosSinTerminar(C.role() === 'admin' ? null : yo) } catch (e) { pendientes = [] } }
   const tabs = [['turnos', 'Turnos'], ['planta', 'Planta en vivo'], ['personas', 'Personas']]
   el.innerHTML = `
   <div class="bh-head">
@@ -453,6 +456,7 @@ async function pintarLista() {
     ${tabs.map(([v, txt]) => `<button aria-selected="${vistaLista === v}" data-a="vistaLista" data-v="${v}">${txt}</button>`).join('')}
   </nav>
   ${error ? '<div class="banner">Sin señal: no se pudo traer la lista de turnos.</div>' : ''}
+  ${avisoPendientes(pendientes, C.role() !== 'admin')}
   ${vistaLista === 'planta' ? pintarPlanta(turnos, dia) : vistaLista === 'personas' ? pintarPersonasDia(turnos, dia) : pintarTurnosPorLinea(turnos, dia)}`
   const f = document.getElementById('bh-fecha'); if (f) f.addEventListener('change', e => { fechaLista = e.target.value || hoyISO(); pintarLista() })
   el.querySelectorAll('[data-filtro]').forEach(x => x.addEventListener('change', e => { filtroPers[x.dataset.filtro] = e.target.value; pintarLista() }))
@@ -478,7 +482,8 @@ function pintarTurnosPorLinea(turnos, dia) {
 
 // Planta en vivo: todos los turnos abiertos, por línea, con cada operación.
 function pintarPlanta(turnos, dia) {
-  const aviso = viejosAbiertos.length ? `<div class="banner" style="margin-top:12px">Hay <b>${viejosAbiertos.length}</b> turno(s) de días anteriores que no se terminaron: ${viejosAbiertos.map(t => `<span class="linkish" data-a="abrir" data-id="${t.id}">${C.esc(lineaTxt(t.linea))} T${C.esc(t.turno)} ${fechaTxt(t.fecha)}</span>`).join(', ')}. Ábrelos y dale "Terminar" para que no queden en curso.</div>` : ''
+  // Los turnos de días anteriores sin terminar ya salen en el aviso de arriba (turnos sin terminar).
+  const aviso = ''
   if (!turnos.length) return '<div class="empty">No hay turnos en curso en este momento.</div>' + aviso
   const todos = turnos.map(t => dia.get(t.id)).filter(Boolean)
   let esp = 0, tot = 0
@@ -570,6 +575,29 @@ function pintarPersonasDia(turnos, dia) {
   <div class="count">Eficiencia del día: lo que hizo cada persona frente a su meta, en el tiempo que tuvo disponible, sumando todos sus turnos y operaciones. Toca el nombre para abrir su Mi Marcador.</div></div>`
 }
 
+/* ---------- turnos sin terminar ---------- */
+// Un turno queda "sin terminar" si ya pasó su hora de salida y sigue en curso.
+function finTurno(t) {
+  const def = CAT.turnos.find(d => d.codigo === t.turno); if (!def) return null
+  const fin = new Date(`${t.fecha}T${String(def.fin).slice(0, 5)}:00`)
+  if (hNum(def.fin) <= hNum(def.inicio)) fin.setDate(fin.getDate() + 1)   // turnos de noche terminan al otro día
+  return fin
+}
+// Del supervisor que se indique; sin cédula (admin), los de todos.
+async function turnosSinTerminar(cedula) {
+  const { data } = await C.supabase.from('bh_turnos').select('*').eq('estado', 'abierto').order('fecha')
+  const ahora = Date.now()
+  return (data || []).filter(t => { const f = finTurno(t); return f && f.getTime() < ahora })
+    .filter(t => !cedula || t.supervisor_cedula === cedula || t.supervisor2_cedula === cedula)
+}
+const MSG_RAPIDO = 'Es rápido: solo escribe lo que se fabricó y dale <b>Terminar</b>.'
+const listaPendientes = (ts, conSup) => ts.map(t => `<button class="btn sm" data-a="abrir" data-id="${t.id}">${C.esc(lineaTxt(t.linea))} · T${C.esc(t.turno)} · ${fechaTxt(t.fecha)}${conSup ? ` · <span class="muted">${C.esc(supNombre(t.supervisor_cedula) || 'sin supervisor')}</span>` : ''}</button>`).join(' ')
+function avisoPendientes(ts, propios) {
+  if (!ts.length) return ''
+  return `<div class="banner bh-pend"><b>${propios ? `Tienes ${ts.length} turno${ts.length > 1 ? 's' : ''} sin terminar` : `Hay ${ts.length} turno${ts.length > 1 ? 's' : ''} sin terminar`}.</b> ${MSG_RAPIDO}
+    <div class="controls" style="margin:8px 0 0">${listaPendientes(ts, !propios)}</div></div>`
+}
+
 function modalNuevoTurno() {
   const p = C.perfil() || {}
   const sups = CAT.supervisores.filter(s => s.activo)
@@ -598,13 +626,25 @@ function modalNuevoTurno() {
     else if (!fila.meta_turno || fila.meta_turno <= 0) { C.toast('Escribe la meta del turno.'); return }
     // Si ese turno ya existe (lo abrió otro supervisor), se abre el mismo.
     const { data: ya } = await C.supabase.from('bh_turnos').select('id').match({ fecha: fila.fecha, turno: fila.turno, linea: fila.linea }).maybeSingle()
-    C.closeModal()
-    if (ya) { C.toast('Ese turno ya estaba abierto: te llevo a él.'); fechaLista = fila.fecha; await abrirTurno(ya.id); return }
-    T = { turno: { ...fila, estado: 'abierto', observaciones: '' }, hojas: [], bloques: [], asig: [], regs: new Map(), pt: [], ptp: [] }
-    fechaLista = fila.fecha
-    encolar('bh_turnos', 'upsert', fila)
-    vista = 'turno'; vistaTurno = 'hojas'; hojaActual = null; guardarCopia(); pintarTurno()
-    if (esPT(fila.linea)) modalPersonasPT(); else modalReferencia()
+    if (ya) { C.closeModal(); C.toast('Ese turno ya estaba abierto: te llevo a él.'); fechaLista = fila.fecha; await abrirTurno(ya.id); return }
+    const abrir = () => {
+      C.closeModal()
+      T = { turno: { ...fila, estado: 'abierto', observaciones: '' }, hojas: [], bloques: [], asig: [], regs: new Map(), pt: [], ptp: [] }
+      fechaLista = fila.fecha
+      encolar('bh_turnos', 'upsert', fila)
+      vista = 'turno'; vistaTurno = 'hojas'; hojaActual = null; guardarCopia(); pintarTurno()
+      if (esPT(fila.linea)) modalPersonasPT(); else modalReferencia()
+    }
+    let pend = []
+    try { pend = await turnosSinTerminar(fila.supervisor_cedula) } catch (e) { pend = [] }
+    if (!pend.length) return abrir()
+    C.openModal(`<h3>Antes de abrir este turno</h3>
+      <div class="hint" style="color:var(--muted);font-size:13.5px;line-height:1.5;margin-bottom:10px"><b>${C.esc(supNombre(fila.supervisor_cedula))}</b>, tienes <b>${pend.length} turno${pend.length > 1 ? 's' : ''} sin terminar</b>. ${MSG_RAPIDO}</div>
+      <div class="controls" style="margin:0 0 6px">${listaPendientes(pend)}</div>
+      <div class="modal-actions"><button class="btn ghost" id="nt-igual">Abrir igual</button></div>`)
+    document.getElementById('nt-igual').addEventListener('click', abrir)
+    // Los botones de cada turno usan data-a="abrir"; el modal está fuera del módulo, así que se atienden aquí.
+    document.querySelectorAll('.modal [data-a="abrir"]').forEach(x => x.addEventListener('click', async () => { C.closeModal(); await abrirTurno(x.dataset.id) }))
   })
 }
 
