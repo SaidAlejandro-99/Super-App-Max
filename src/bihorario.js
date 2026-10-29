@@ -499,14 +499,13 @@ function pintarPlanta(turnos, dia) {
       <div class="tablebox"><table><thead><tr><th>Persona</th><th class="num">Hizo</th><th class="num">En el proceso</th><th class="num">Efic.</th></tr></thead><tbody>
       ${d.pt.personas.map(p => `<tr><td><span class="bh-nombre" data-a="verMarcador" data-c="${C.esc(p.cedula)}">${C.esc(opNombre(p.cedula))}</span></td><td class="num">${C.fmt0(p.cantidad)}</td><td class="num">${C.fmt(p.proceso / 60, 1)} h</td><td class="num ${efClase(p.ef)}">${pct(p.ef)}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">Sin personas.</td></tr>'}
       </tbody></table></div></div>`
+    // Igual que la vista general del turno: cada operación hora por hora, con el acumulado
+    // y el color de la referencia trabajada en cada hora.
+    const colorHoja = new Map(X.hojas.map((h, k) => [h.id, COLORES[k % COLORES.length]]))
+    const filas = d.lista.map(o => ({ ...o, personas: o.personas.size, cuello: d.cuello && d.cuello.operacion === o.operacion }))
     return `<div class="section bh-planta">${cab}
-      <div class="tablebox"><table><thead><tr><th>Operación</th><th class="num">Llevan</th><th class="num">Esperado</th><th class="num">Efic.</th><th class="num">Pers.</th><th class="num">Hasta las</th></tr></thead><tbody>
-      ${d.lista.map(o => `<tr class="${d.cuello && d.cuello.operacion === o.operacion ? 'bh-fila-cuello' : ''}">
-        <td>${C.esc(o.operacion)}${d.cuello && d.cuello.operacion === o.operacion ? ' <span class="pill inc">cuello</span>' : ''}</td>
-        <td class="num"><b>${C.fmt0(o.total)}</b></td><td class="num muted">${o.conMeta ? C.fmt0(o.esperado) : '—'}</td>
-        <td class="num ${efClase(o.ef)}">${o.turnoMeta && o.ef == null ? '<small>al cierre</small>' : pct(o.ef)}</td>
-        <td class="num">${o.personas.size}</td><td class="num muted">${o.ultima >= 0 ? (d.horas.find(h => h.i === o.ultima) || { label: '' }).label : '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">Aún no hay operaciones.</td></tr>'}
-      </tbody></table></div></div>`
+      ${X.hojas.length > 1 ? `<div class="bh-leyenda" style="margin-bottom:6px">${X.hojas.map(h => `<span><i style="background:${colorHoja.get(h.id)}"></i>${C.esc(h.codigo)} · ${C.esc(C.m1.codeInfo(h.codigo).cliente || '')}</span>`).join('')}</div>` : ''}
+      ${filas.length ? tablaMapa(filas, d.horas, colorHoja, false) : '<div class="empty">Aún no hay operaciones.</div>'}</div>`
   }).join('')).join('')}${aviso}`
 }
 

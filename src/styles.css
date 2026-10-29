@@ -381,3 +381,4 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 .bh-planta-k{display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
 .bh-planta-k b{color:var(--fg)}
 @media (max-width:640px){.bh-linea{grid-template-columns:1fr}.bh-linea-t{padding-top:0}}
+.bh-planta .bh-mapa{margin:0;border:none;padding:0!important;background:none;box-shadow:none}
