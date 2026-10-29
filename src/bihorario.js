@@ -131,7 +131,7 @@ async function cargarCatalogos() {
     s.from('turnos_def').select('*').order('orden'),
     s.from('causas_tm').select('*').order('orden'),
     s.from('supervisores').select('*').order('nombre'),
-    s.from('operarios').select('cedula, nombre, linea, operacion_base, activo').order('nombre').range(0, 4999),
+    s.from('operarios').select('cedula, nombre, linea, operacion_base, activo, grupo').order('nombre').range(0, 4999),
   ])
   const err = t.error || c.error || sp.error || op.error
   if (err) throw err
@@ -150,7 +150,7 @@ async function asegurarCatalogos() {
   }
 }
 export async function recargarOperarios() {
-  const { data } = await C.supabase.from('operarios').select('cedula, nombre, linea, operacion_base, activo').order('nombre').range(0, 4999)
+  const { data } = await C.supabase.from('operarios').select('cedula, nombre, linea, operacion_base, activo, grupo').order('nombre').range(0, 4999)
   if (data) CAT.operarios = data
   const sp = await C.supabase.from('supervisores').select('*').order('nombre')
   if (sp.data) CAT.supervisores = sp.data
@@ -774,6 +774,7 @@ function modalPersonasPT() {
   const ya = new Set((T.ptp || []).map(p => p.cedula))
   const elegidos = new Set()
   const linea = T.turno.linea
+  let prio = { puntaje: o => (o.linea === linea ? 2 : 0), etiquetas: () => '' }
   C.openModal(`<h3>Personas en ${C.esc(lineaTxt(linea))}</h3>
     <input class="search" style="width:100%" type="search" id="pp-q" placeholder="Buscar por nombre o cédula…" autocomplete="off">
     <div class="hlist" id="pp-res"></div>
@@ -781,13 +782,14 @@ function modalPersonasPT() {
   const draw = q => {
     const n = q.trim().toLowerCase()
     const lista = CAT.operarios.filter(o => o.activo && !ya.has(o.cedula) && (!n || (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)))
-      .sort((x, y) => ((y.linea === linea) - (x.linea === linea)) || x.nombre.localeCompare(y.nombre)).slice(0, 150)
+      .sort((x, y) => (prio.puntaje(y) - prio.puntaje(x)) || x.nombre.localeCompare(y.nombre)).slice(0, 150)
     document.getElementById('pp-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegidos.has(o.cedula) ? 'on' : ''}" data-ced="${o.cedula}">
       <td style="width:30px"><input type="checkbox" ${elegidos.has(o.cedula) ? 'checked' : ''} tabindex="-1"></td>
-      <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div></td>
+      <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div><div style="margin-top:2px">${prio.etiquetas(o)}</div></td>
       <td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}</td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
   }
   draw('')
+  prioridadPersonas().then(p => { prio = p; const q2 = document.getElementById('pp-q'); if (q2) draw(q2.value) })
   const q = document.getElementById('pp-q'); setTimeout(() => q.focus(), 50)
   q.addEventListener('input', e => draw(e.target.value))
   document.getElementById('pp-res').addEventListener('click', e => {
@@ -1141,26 +1143,49 @@ function modalCelda(asigId, h) {
 }
 
 /* ---------- referencia, operación, personas ---------- */
+// Pedidos cargados desde el Excel (Métodos y Tiempos → Cargar archivos): pedido → código.
+let PEDIDOS = null
+async function cargarPedidos() {
+  if (PEDIDOS) return PEDIDOS
+  const out = []
+  for (let desde = 0; ; desde += 1000) {
+    const { data, error } = await C.supabase.from('pedidos').select('planeador, pedido, codigo, cliente, cantidad, saldo, origen').range(desde, desde + 999)
+    if (error || !data) break
+    out.push(...data); if (data.length < 1000) break
+  }
+  // Un pedido puede venir de los dos archivos: se deja uno (primero el de la base de pedidos).
+  const m = new Map(); out.sort((a, b) => (a.origen === 'bdd' ? 0 : 1) - (b.origen === 'bdd' ? 0 : 1)).forEach(x => { if (!m.has(x.planeador)) m.set(x.planeador, x) })
+  PEDIDOS = [...m.values()]
+  return PEDIDOS
+}
+
 function modalReferencia(hojaEditar) {
   const cods = C.m1.codigos()
   const he = hojaEditar ? T.hojas.find(h => h.id === hojaEditar) : null
   C.openModal(`<h3>${he ? 'Cambiar código de la referencia' : 'Agregar referencia'}</h3>
     <div class="hint" style="color:var(--muted);font-size:12.5px">${he ? `Hoy es <b class="mono">${C.esc(he.codigo)}</b>. Se conservan las operaciones, personas y horas registradas; las metas de Métodos y Tiempos se recalculan con el código nuevo.`
       : 'El código del saco que se va a trabajar. Si cambian de referencia en el turno, se agrega otra.'}</div>
-    <input class="search" style="width:100%;margin-top:10px" type="search" id="rf-q" placeholder="Buscar código o cliente…" autocomplete="off">
+    <input class="search" style="width:100%;margin-top:10px" type="search" id="rf-q" placeholder="Buscar código, cliente o número de pedido…" autocomplete="off">
     <div class="hlist" id="rf-res"></div>`, true)
   const linea = T.turno.linea
   const draw = q => {
     const n = q.trim().toLowerCase()
     const lista = cods.filter(c => !n || (c.codigo + ' ' + c.cliente + ' ' + (c.descripcion || '')).toLowerCase().includes(n))
       .sort((a, b) => (b.linea && linea.startsWith(b.linea) ? 1 : 0) - (a.linea && linea.startsWith(a.linea) ? 1 : 0)).slice(0, 120)
-    document.getElementById('rf-res').innerHTML = `<table><tbody>${lista.map(c => `<tr>
+    // Si escriben un número de pedido (3 dígitos o más), arriba salen los pedidos que coinciden con su código.
+    const peds = /^\d{3,}/.test(n) && PEDIDOS ? PEDIDOS.filter(x => x.planeador.startsWith(n) || x.pedido === n).slice(0, 12) : []
+    document.getElementById('rf-res').innerHTML = `<table><tbody>${peds.map(x => `<tr>
+      <td class="codecell">${C.esc(x.codigo)}<div class="muted" style="font-size:11px">Pedido <b>${C.esc(x.planeador)}</b>${x.cantidad ? ' · ' + C.fmt0(x.cantidad) + ' und' : ''}</div></td>
+      <td class="muted" style="font-size:12px">${C.esc(x.cliente)}</td>
+      <td>${C.m1.tiemposOf(x.codigo).length ? '<span class="pill si">Con tiempos</span>' : '<span class="pill no">Sin estudio</span>'}</td>
+      <td><button class="btn sm go" data-ref="${C.esc(x.codigo)}">Elegir</button></td></tr>`).join('')}${lista.map(c => `<tr>
       <td class="codecell">${C.esc(c.codigo)}</td><td class="muted" style="font-size:12px">${C.esc(c.cliente)}</td>
       <td>${C.m1.tiemposOf(c.codigo).length ? '<span class="pill si">Con tiempos</span>' : '<span class="pill no">Sin estudio</span>'}</td>
-      <td><button class="btn sm go" data-ref="${C.esc(c.codigo)}">Elegir</button></td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
+      <td><button class="btn sm go" data-ref="${C.esc(c.codigo)}">Elegir</button></td></tr>`).join('') || (peds.length ? '' : '<tr><td class="empty">Sin resultados</td></tr>')}</tbody></table>`
   }
   draw('')
   document.getElementById('rf-q').addEventListener('input', e => draw(e.target.value))
+  cargarPedidos().then(() => { const q = document.getElementById('rf-q'); if (q && q.value) draw(q.value) }).catch(() => {})
   document.getElementById('rf-res').addEventListener('click', e => {
     const x = e.target.closest('[data-ref]'); if (!x) return
     if (he) {
@@ -1271,6 +1296,37 @@ function modalOperacion(bloqueId) {
   })
 }
 
+/* ---------- prioridad al escoger personas ---------- */
+// Primero las programadas en este turno ese día, luego las del grupo del supervisor
+// (y FIJO, que rotan), luego las de la línea. Novedades (VAC, INCP, LNR…) van al final.
+// La programación se carga en Métodos y Tiempos → Cargar archivos.
+const NOVEDAD = { VAC: 'Vacaciones', INCP: 'Incapacidad', LNR: 'Licencia', LR: 'Licencia', SUS: 'Suspensión' }
+function gruposDe(...cedulas) {
+  const grupos = new Set(CAT.operarios.map(o => o.grupo).filter(Boolean))
+  const tokens = cedulas.filter(Boolean).flatMap(c => { const s = CAT.supervisores.find(x => x.cedula === c); return s ? s.nombre.toUpperCase().split(/\s+/).map(t => t.slice(0, 4)) : [] })
+  // El grupo es el nombre de pila del supervisor (PETRA = Petrona); las MAQ 1 a 4 son de Kewil.
+  return new Set([...grupos].filter(g => tokens.includes(g.slice(0, 4)) || (/^MAQ/.test(g) && tokens.includes('KEWI'))))
+}
+async function prioridadPersonas() {
+  const prog = new Map()
+  try { const { data } = await C.supabase.from('programacion').select('cedula, turno').eq('fecha', T.turno.fecha); (data || []).forEach(r => prog.set(r.cedula, r.turno)) } catch (e) {}
+  const grupos = gruposDe(T.turno.supervisor_cedula, T.turno.supervisor2_cedula), linea = T.turno.linea, turno = String(T.turno.turno).toUpperCase()
+  const puntaje = o => {
+    const t = prog.get(o.cedula)
+    if (t && NOVEDAD[t]) return -10
+    return (t === turno ? 8 : 0) + (grupos.has(o.grupo) ? 4 : o.grupo === 'FIJO' ? 1 : 0) + (o.linea === linea ? 2 : 0)
+  }
+  const etiquetas = o => {
+    const t = prog.get(o.cedula), out = []
+    if (t && NOVEDAD[t]) out.push(`<span class="pill no">${NOVEDAD[t]}</span>`)
+    else if (t === turno) out.push('<span class="pill si">Programado en este turno</span>')
+    else if (t) out.push(`<span class="pill man">Programado T${C.esc(t)}</span>`)
+    if (grupos.has(o.grupo)) out.push(`<span class="pill inc">Grupo ${C.esc(o.grupo.charAt(0) + o.grupo.slice(1).toLowerCase())}</span>`)
+    return out.join(' ')
+  }
+  return { puntaje, etiquetas }
+}
+
 // Cambio de referencia en el turno: la misma operación de la referencia anterior
 // suele seguir con la misma gente. Devuelve { hoja, asig } o null.
 function personasDeReferenciaAnterior(hoja, operacion) {
@@ -1324,17 +1380,19 @@ function modalPersonas(bloqueId) {
       <span><button class="btn ghost" data-act="closeModal">Cancelar</button> <button class="btn go" id="pe-ok">Agregar (0)</button></span>
     </div>`, true)
   const linea = T.turno.linea
+  let prio = { puntaje: o => (o.linea === linea ? 2 : 0), etiquetas: () => '' }
   const draw = q => {
     const n = q.trim().toLowerCase()
     const lista = CAT.operarios.filter(o => o.activo && !ya.has(o.cedula) && (!n || (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)))
-      .sort((x, y) => ((y.linea === linea) - (x.linea === linea)) || x.nombre.localeCompare(y.nombre)).slice(0, 150)
+      .sort((x, y) => (prio.puntaje(y) - prio.puntaje(x)) || x.nombre.localeCompare(y.nombre)).slice(0, 150)
     document.getElementById('pe-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegidos.has(o.cedula) ? 'on' : ''}" data-ced="${o.cedula}">
       <td style="width:30px"><input type="checkbox" ${elegidos.has(o.cedula) ? 'checked' : ''} tabindex="-1"></td>
-      <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div></td>
+      <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div><div style="margin-top:2px">${prio.etiquetas(o)}</div></td>
       <td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}<br>${C.esc(o.operacion_base || '')}</td>
       <td>${enTurno.has(o.cedula) ? '<span class="pill inc">Ya en el turno</span>' : ''}</td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
   }
   draw('')
+  prioridadPersonas().then(p => { prio = p; const q2 = document.getElementById('pe-q'); if (q2) draw(q2.value) })
   const q = document.getElementById('pe-q'); setTimeout(() => q.focus(), 50)
   q.addEventListener('input', e => draw(e.target.value))
   document.getElementById('pe-res').addEventListener('click', e => {

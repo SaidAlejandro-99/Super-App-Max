@@ -7,6 +7,7 @@ import { supabase } from './supabaseClient.js'
 import * as bihorario from './bihorario.js'
 import * as personal from './personal.js'
 import * as marcador from './marcador.js'
+import * as cargas from './cargas.js'
 
 /* ---------- estado ---------- */
 const D = {
@@ -907,6 +908,7 @@ function exportExcel() {
 
 /* ---------- navegación / render ---------- */
 function setTab(t) {
+  if (t === 'cargas') delete document.getElementById('p-cargas').dataset.listo   // al entrar se vuelve a pintar
   curTab = t; if (t !== 'codigos') curCode = null; document.querySelectorAll('nav.tabs button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === t ? 'true' : 'false'))
   document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'p-' + t)); window.scrollTo(0, 0); render()
 }
@@ -916,6 +918,9 @@ function render() {
   else if (curTab === 'futura') renderFutura()
   else if (curTab === 'operaciones') renderOperaciones()
   else if (curTab === 'bihorario') renderDesdeBH()
+  // Cargar archivos se pinta una vez al entrar a la pestaña: así una recarga de datos
+  // (por ejemplo, tras cargar el plan) no borra los archivos que ya se escogieron.
+  else if (curTab === 'cargas') { const p = document.getElementById('p-cargas'); if (ROLE !== 'admin') setTab('resumen'); else if (!p.dataset.listo) { p.dataset.listo = '1'; cargas.render(p) } }
 }
 document.querySelectorAll('nav.tabs button').forEach(b => b.addEventListener('click', () => setTab(b.dataset.tab)))
 document.getElementById('exportBtn').addEventListener('click', exportExcel)
@@ -972,6 +977,8 @@ document.querySelectorAll('#modsw button').forEach(b => b.addEventListener('clic
 bihorario.init(ctx)
 personal.init(ctx)
 marcador.init(ctx)
+// Después de cargar un archivo se refresca lo que depende de él.
+cargas.init({ ...ctx, alCargar: k => { if (k === 'plan') loadAll(); if (k === 'programacion') bihorario.recargarOperarios() } })
 
 /* ---------- login / roles (Supabase Auth) ---------- */
 function setRole(perfil) {

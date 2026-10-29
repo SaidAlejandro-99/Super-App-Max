@@ -213,3 +213,22 @@ real con el tiempo estándar, y el admin actualiza con un clic.
 - **Supervisores nuevos:** Kewill Figueroa y Willian Tarazona.
 - Los catálogos (supervisores, turnos, personal) se vuelven a pedir al iniciar
   sesión y nunca se guardan vacíos.
+
+## Cargar archivos (28-oct-2026)
+
+Pestaña **Cargar archivos** en Métodos y Tiempos (solo admin, desde el PC).
+El Excel se lee en el computador y solo se suben las columnas que usa la app. No se suben precios.
+
+| Archivo | Hoja | Qué se guarda | Para qué |
+|---|---|---|---|
+| PLANNING SUPER SACOS (.xlsm) | BDD ANGIE V2 | pedidos con código → `pedidos` (origen `bdd`) | buscar la referencia por número de pedido |
+| SUPERSACOS (.xlsx) | MAESTRO_PROG | pedidos → `pedidos` (origen `plan`); los no entregados, por código → `planning` | Producción futura y búsqueda por pedido |
+| NOVEDADES NÓMINA (.xlsx) | Prog. Personal | línea, grupo, rol y operación → `operarios`; turno por día (de ayer a 14 días) → `programacion` | priorizar personas en el Bi-horario |
+
+- Cada carga reemplaza lo anterior de ese archivo.
+- Los códigos de los pedidos que no existían se crean en `codigos` (sin tiempos), para poder usarlos en el Bi-horario.
+- **Prioridad al escoger personas:**
+  1. Programadas en ese turno ese día.
+  2. Del grupo del supervisor (el grupo es su nombre de pila; MAQ 1 a 4 son de Kewil; FIJO rotan).
+  3. De la línea.
+  - Las que están en vacaciones, incapacidad o licencia van al final, marcadas.
