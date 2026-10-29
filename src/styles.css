@@ -366,3 +366,18 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 /* Desde Bi-horario: tablas compactas que caben sin deslizar */
 .mt-bh table{min-width:0;font-size:12.5px}
 .mt-bh th,.mt-bh td{padding:6px 7px}
+/* Lista de turnos por línea, Planta en vivo */
+.bh-linea{display:grid;grid-template-columns:120px 1fr;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
+.bh-linea-t{font-family:"Archivo","IBM Plex Sans",sans-serif;font-weight:700;font-size:15px;padding-top:10px}
+.bh-linea-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.bh-card.abierto{border-left:4px solid var(--good)}
+.bh-card-fab{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:4px 0;padding:8px 10px;border-radius:9px;background:var(--good-bg)}
+.bh-card-fab small{font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);font-weight:600;width:100%}
+.bh-card-fab>b{font-family:"IBM Plex Mono",monospace;font-size:24px;line-height:1}
+.bh-card-fab span{font-size:12.5px;color:var(--muted)}
+.bh-planta{padding:12px 14px}
+.bh-planta-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;cursor:pointer}
+.bh-planta-h b{font-size:15px}
+.bh-planta-k{display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--muted)}
+.bh-planta-k b{color:var(--fg)}
+@media (max-width:640px){.bh-linea{grid-template-columns:1fr}.bh-linea-t{padding-top:0}}

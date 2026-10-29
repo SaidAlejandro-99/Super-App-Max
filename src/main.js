@@ -989,6 +989,7 @@ async function entrar(session) {
   setRole(perfil || { nombre: session.user.email, rol: 'visita' })
   document.getElementById('login').hidden = true
   document.getElementById('inicio').hidden = true
+  bihorario.alEntrar()
   let guardado = null; try { guardado = localStorage.getItem('ssmod') } catch (e) {}
   setModule(guardado || (ROLE === 'supervisor' ? 'bh' : 'm1'))
   await loadAll()

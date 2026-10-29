@@ -196,3 +196,20 @@ real con el tiempo estándar, y el admin actualiza con un clic.
     - Si lo cambia, en `tiempos.fuente` queda "Manual" junto con lo que sugería el Bi-horario.
   - **Descartar** quita de la lista una fila que no va (código y operación).
     - Se guarda en `config.mt_bh_descartes` y se recupera con el filtro "Descartados".
+
+## Lista del Bi-horario (28-oct-2026)
+
+- Tres vistas arriba:
+  - **Turnos:** por línea, en orden fijo, con los turnos de cada línea lado a lado
+    por hora. Filtro: todos, en curso o terminados.
+  - **Planta en vivo:** todos los turnos abiertos de hoy y de ayer, por línea y
+    operación (llevan, esperado, eficiencia, personas, hasta qué hora y cuello).
+    - Los turnos de días anteriores que no se terminaron se avisan aparte.
+  - **Personas:** eficiencia del día de cada operario, sumando todos sus turnos y
+    operaciones (tiempo estándar ganado ÷ tiempo disponible), con filtros por
+    línea y supervisor.
+- **Tarjetas:** sin barra de progreso ni lista de operaciones.
+  - Al terminar el turno, lo **fabricado** sale resaltado (y el % frente a la meta del turno).
+- **Supervisores nuevos:** Kewill Figueroa y Willian Tarazona.
+- Los catálogos (supervisores, turnos, personal) se vuelven a pedir al iniciar
+  sesión y nunca se guardan vacíos.
