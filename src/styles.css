@@ -145,6 +145,8 @@ td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-varian
   box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:50;opacity:0;transition:opacity .2s;pointer-events:none}
 .notice.show{opacity:1;pointer-events:auto;cursor:pointer}
 .notice{max-width:min(92vw,560px);text-align:center}
+/* Calidad: solo la consulta de pedidos del Bi-horario */
+body.calidad #modsw button:not([data-mod="bh"]), body.calidad #exportBtn{display:none !important}
 .ef-raro:not(i)::after{content:" ⚠";color:var(--amber)}
 .bh-alerta{margin-top:8px;padding:8px 10px;border-radius:8px;border:1px solid var(--amber);background:color-mix(in srgb,var(--amber) 14%,transparent);font-size:13px;line-height:1.4}
 .tb-role.alerta{background:var(--bad);border-color:var(--bad);color:#fff}

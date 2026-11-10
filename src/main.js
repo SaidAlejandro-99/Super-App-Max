@@ -964,6 +964,7 @@ const ctx = {
 }
 function setModule(m) {
   if (!MODULOS[m]) m = 'm1'
+  if (ROLE === 'calidad') m = 'bh'
   curMod = m
   try { localStorage.setItem('ssmod', m) } catch (e) {}
   for (const [k, v] of Object.entries(MODULOS)) document.getElementById(v.el).hidden = k !== m
@@ -986,11 +987,13 @@ cargas.init({ ...ctx, alCargar: k => { if (k === 'plan') loadAll(); if (k === 'p
 function setRole(perfil) {
   PERFIL = perfil
   // 'admin' edita todo; 'supervisor' llena el Bi-horario y ve el Módulo 1 en solo lectura.
-  ROLE = perfil && (perfil.rol === 'admin' || perfil.rol === 'supervisor') ? perfil.rol : 'visita'
+  // 'calidad' solo consulta pedidos en el Bi-horario (trazabilidad y liberación).
+  ROLE = perfil && ['admin', 'supervisor', 'calidad'].includes(perfil.rol) ? perfil.rol : 'visita'
   document.body.classList.toggle('visita', ROLE !== 'admin')
   document.body.classList.toggle('es-admin', ROLE === 'admin')
+  document.body.classList.toggle('calidad', ROLE === 'calidad')
   const rc = document.getElementById('rolechip')
-  const etiqueta = { admin: 'Administrador', supervisor: 'Supervisor', visita: 'Solo lectura' }[ROLE]
+  const etiqueta = { admin: 'Administrador', supervisor: 'Supervisor', visita: 'Solo lectura', calidad: 'Calidad · Pedidos' }[ROLE]
   if (rc) rc.textContent = `${perfil && perfil.nombre ? perfil.nombre + ' · ' : ''}${etiqueta}`
 }
 async function entrar(session) {
