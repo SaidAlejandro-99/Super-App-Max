@@ -623,7 +623,14 @@ async function pintarLista() {
     const buscar = () => { pedidoBuscado = bp.value.trim(); pintarLista() }
     bp.addEventListener('keydown', e => { if (e.key === 'Enter') buscar() })
     document.getElementById('bh-ped-ok').addEventListener('click', buscar)
-    if (!pedidoBuscado) setTimeout(() => bp.focus(), 50)
+  }
+  // Filtro de la lista de pedidos: se aplica al escribir, sin perder el cursor.
+  const pf = document.getElementById('bh-pedf'); if (pf) {
+    let espera = null
+    pf.addEventListener('input', () => { clearTimeout(espera); espera = setTimeout(async () => {
+      textoPed = pf.value; const pos = pf.selectionStart; await pintarLista()
+      const n = document.getElementById('bh-pedf'); if (n) { n.focus(); n.setSelectionRange(pos, pos) }
+    }, 350) })
   }
   el.querySelectorAll('[data-filtro]').forEach(x => x.addEventListener('change', e => { filtroPers[x.dataset.filtro] = e.target.value; pintarLista() }))
 }
@@ -750,12 +757,64 @@ function pintarPersonasDia(turnos, dia) {
 // (Alternas, Prensa y Liner no cuentan). El lote del pedido (9705-1) no importa.
 const LINEAS_PEDIDO = ['PANEL', 'CIRCULAR', '4PANEL', 'UPANEL']
 const numPedido = p => String(p || '').split('-')[0].trim()
-let pedidoBuscado = ''
+let pedidoBuscado = '', filtroPed = 'curso', textoPed = ''
+// Resumen por pedido calculado en la base (pedidos_resumen): pedido, fabricado al cierre,
+// enlainado (Liner) y prensado (Prensa). Cada registro cuenta para un solo pedido.
+// (Se guarda 1 minuto para que filtrar o entrar y salir de un pedido no lo vuelva a pedir.)
+let RESUMEN_PED = null
+async function resumenPedidos() {
+  if (RESUMEN_PED && Date.now() - RESUMEN_PED.at < 60000) return RESUMEN_PED.data
+  const { data, error } = await C.supabase.rpc('pedidos_resumen')
+  if (error) return null
+  RESUMEN_PED = { at: Date.now(), data: data || [] }
+  return RESUMEN_PED.data
+}
+// En curso: tiene un turno abierto o se trabajó en los últimos 7 días y no se ha completado.
+function estadoPedido(r) {
+  const hace7 = new Date(); hace7.setDate(hace7.getDate() - 7)
+  if (+r.cantidad > 0 && +r.fabricado >= +r.cantidad) return 'completo'
+  return r.en_proceso || (r.ultima && r.ultima >= hace7.toISOString().slice(0, 10)) ? 'curso' : 'quieto'
+}
+const ESTADO_PED = { curso: ['si', 'En curso'], completo: ['man', 'Completo'], quieto: ['inc', 'Sin movimiento'] }
+async function listaPedidos() {
+  const res = await resumenPedidos()
+  if (!res) return '<div class="empty">No se pudo traer el resumen de pedidos. Revisa la señal y vuelve a intentar.</div>'
+  const filas = res.map(r => ({ ...r, estado: estadoPedido(r) }))
+  const curso = filas.filter(r => r.estado === 'curso'), anteriores = filas.filter(r => r.estado !== 'curso')
+  const t = textoPed.trim().toLowerCase()
+  const lista = (filtroPed === 'curso' ? curso : filtroPed === 'anteriores' ? anteriores : filas)
+    .filter(r => !t || `${r.pedido} ${r.cliente} ${r.codigo} ${r.referencia}`.toLowerCase().includes(t))
+    .sort((a, b) => String(b.ultima || '').localeCompare(String(a.ultima || '')) || b.pedido.localeCompare(a.pedido))
+  const n = v => +v || 0
+  const barra = r => { const p = n(r.cantidad) ? Math.min(1, n(r.fabricado) / n(r.cantidad)) : 0; return `<div class="bh-efbar"><i class="${p >= 1 ? 'ef-ok' : p >= 0.5 ? 'ef-med' : 'ef-bajo'}" style="width:${Math.round(p * 100)}%"></i><b>${n(r.cantidad) ? Math.round(100 * n(r.fabricado) / n(r.cantidad)) + '%' : '—'}</b></div>` }
+  const tot = k => lista.reduce((s, r) => s + n(r[k]), 0)
+  return `
+  <div class="controls" style="margin:6px 0 10px">
+    <div class="bh-chips">${[['curso', `En curso (${curso.length})`], ['anteriores', `Anteriores (${anteriores.length})`], ['todos', `Todos (${filas.length})`]]
+      .map(([v, txt]) => `<button type="button" class="bh-chip ${filtroPed === v ? 'on' : ''}" data-a="filtroPed" data-v="${v}">${txt}</button>`).join('')}</div>
+    <input class="search" type="search" id="bh-pedf" placeholder="Filtrar por cliente, código o pedido…" value="${C.esc(textoPed)}" style="max-width:300px">
+  </div>
+  <div class="section" style="padding:10px"><div class="tablebox"><table class="bh-pedidos">
+    <thead><tr><th>Pedido</th><th>Cliente</th><th>Código</th><th class="num">Pedido (und)</th><th class="num">Fabricado</th><th>Avance</th><th class="num">Enlainado</th><th class="num">Prensado</th><th>Último mov.</th><th>Estado</th></tr></thead>
+    <tbody>${lista.map(r => `<tr class="linkish" data-a="verPedido" data-p="${C.esc(r.pedido)}" title="Ver el pedido completo">
+      <td class="mono"><b>${C.esc(r.pedido)}</b></td><td>${C.esc(r.cliente || '')}</td><td class="mono" style="font-size:12px">${C.esc(r.codigo || '')}</td>
+      <td class="num">${C.fmt0(n(r.cantidad))}</td><td class="num"><b>${C.fmt0(n(r.fabricado))}</b></td><td style="min-width:110px">${barra(r)}</td>
+      <td class="num">${n(r.enlainado) ? C.fmt0(n(r.enlainado)) : '<span class="muted">—</span>'}</td>
+      <td class="num">${n(r.prensado) ? `${C.fmt0(n(r.prensado))}<div class="muted" style="font-size:11px">${[n(r.prensa_pallet) ? C.fmt0(n(r.prensa_pallet)) + ' pallet' : '', n(r.prensa_bulto) ? C.fmt0(n(r.prensa_bulto)) + ' bulto' : ''].filter(Boolean).join(' · ')}</div>` : '<span class="muted">—</span>'}</td>
+      <td class="muted" style="white-space:nowrap">${r.ultima ? fechaTxt(r.ultima) : '—'}</td>
+      <td><span class="pill ${ESTADO_PED[r.estado][0]}">${ESTADO_PED[r.estado][1]}</span>${r.en_proceso ? '<div class="muted" style="font-size:11px">turno abierto</div>' : ''}</td></tr>`).join('')
+      || `<tr><td colspan="10" class="empty">${t ? 'Ningún pedido coincide con el filtro.' : 'No hay pedidos en este grupo.'}</td></tr>`}</tbody>
+    ${lista.length ? `<tfoot><tr><td colspan="3"><b>Total (${lista.length})</b></td><td class="num">${C.fmt0(tot('cantidad'))}</td><td class="num"><b>${C.fmt0(tot('fabricado'))}</b></td><td></td><td class="num">${C.fmt0(tot('enlainado'))}</td><td class="num">${C.fmt0(tot('prensado'))}</td><td colspan="2"></td></tr></tfoot>` : ''}
+  </table></div>
+  <div class="count">Fabricado: lo reportado al terminar el turno en Panel, Circular, 4 Panel y U-panel. Enlainado (Liner) y prensado (Prensa): sacos anotados con el código del pedido en sus fechas; si dos pedidos tienen el mismo código, cada registro cuenta para uno solo (el que se estaba fabricando y entrega primero). En curso: turno abierto o movimiento en los últimos 7 días sin completar. Toca un pedido para ver el detalle.</div></div>`
+}
 async function pintarPedidos() {
   const q = numPedido(pedidoBuscado)
-  const buscador = `<div class="controls"><input class="search" type="search" id="bh-ped" inputmode="numeric" placeholder="Número de pedido (ej: 8868)" value="${C.esc(q)}" style="max-width:260px"><button class="btn go" id="bh-ped-ok">Buscar</button></div>`
-  if (!/^\d{3,}/.test(q)) return buscador + '<div class="hint">Escribe el número del pedido y dale Buscar.</div>'
+  const buscador = `<div class="controls"><input class="search" type="search" id="bh-ped" inputmode="numeric" placeholder="Número de pedido (ej: 8868)" value="${C.esc(q)}" style="max-width:260px"><button class="btn go" id="bh-ped-ok">Buscar</button>
+    ${q ? '<button class="btn ghost" data-a="volverPedidos">← Todos los pedidos</button>' : ''}</div>`
+  if (!/^\d{3,}/.test(q)) return buscador + await listaPedidos()
   await cargarPedidos()
+  const resumen = ((await resumenPedidos()) || []).filter(r => r.pedido === q)
   const peds = PEDIDOS.filter(x => numPedido(x.pedido || x.planeador) === q || numPedido(x.planeador) === q)
   const codigos = [...new Set(peds.map(p => p.codigo))]
   const s = C.supabase
@@ -810,6 +869,9 @@ async function pintarPedidos() {
   <div class="grid kpis" style="margin:10px 0 12px">
     <div class="kpi good"><div class="label">Fabricado</div><div class="value">${C.fmt0(total)}</div><div class="sub">${pedido ? `de ${C.fmt0(pedido)} · ${Math.round(100 * total / pedido)}%` : ''}</div></div>
     <div class="kpi"><div class="label">Pendiente</div><div class="value">${pedido ? C.fmt0(Math.max(0, pedido - total)) : '—'}</div></div>
+    <div class="kpi"><div class="label">Enlainado (Liner)</div><div class="value">${C.fmt0(resumen.reduce((s, r) => s + (+r.enlainado || 0), 0))}</div><div class="sub">${pedido ? 'de ' + C.fmt0(pedido) : ''}</div></div>
+    <div class="kpi"><div class="label">Prensado (Prensa)</div><div class="value">${C.fmt0(resumen.reduce((s, r) => s + (+r.prensado || 0), 0))}</div>
+      <div class="sub">${[['prensa_pallet', 'pallet'], ['prensa_bulto', 'bulto']].map(([k, t]) => { const v = resumen.reduce((s, r) => s + (+r[k] || 0), 0); return v ? `${C.fmt0(v)} ${t}` : '' }).filter(Boolean).join(' · ')}</div></div>
     <div class="kpi"><div class="label">Turnos</div><div class="value">${new Set(filas.map(f => f.t.id)).size}</div></div>
   </div>
   <div class="section" style="padding:10px"><div class="tablebox"><table>
@@ -2097,7 +2159,8 @@ function confirmar(titulo, texto, alAceptar) {
 /* ---------- clics ---------- */
 async function onClick(e) {
   const x = e.target.closest('[data-a]'); if (!x) return
-  if (esCalidad()) return  // Calidad solo busca pedidos: no abre turnos ni cambia de vista.
+  // Calidad solo consulta pedidos: no abre turnos ni cambia de vista.
+  if (esCalidad() && !['verPedido', 'volverPedidos', 'filtroPed'].includes(x.dataset.a)) return
   const id = x.dataset.id
   switch (x.dataset.a) {
     case 'nuevoTurno': return modalNuevoTurno()
@@ -2171,6 +2234,9 @@ async function onClick(e) {
     case 'mgEditar': return modalManguita(null, T.bloques.find(y => y.id === id))
     case 'mgLider': return agregarLider()
     case 'vistaManguita': vistaTurno = 'hojas'; return pintarTurno()
+    case 'verPedido': pedidoBuscado = x.dataset.p; window.scrollTo(0, 0); return pintarLista()
+    case 'volverPedidos': pedidoBuscado = ''; return pintarLista()
+    case 'filtroPed': filtroPed = x.dataset.v; return pintarLista()
     case 'mgQuitarPersona': {
       // Quita a la persona de manguita en esta referencia: todas sus operaciones y horas.
       const c = x.dataset.c
