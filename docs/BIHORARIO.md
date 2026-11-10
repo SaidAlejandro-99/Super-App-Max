@@ -112,10 +112,22 @@ anota lo hecho en la hora y el acumulado. Al pie: personal indirecto
 
 ## Ajustes del piloto (20-oct-2026)
 
-- **Meta obligatoria** en cada operación: Métodos y Tiempos, manual o, para
-  Revisión y Patinador, **meta del turno**.
+- **Meta obligatoria** en cada operación: Métodos y Tiempos o manual.
 - **Meta del turno**: una por línea, se escribe al abrir el turno (editable).
-  Revisión y Patinador se califican al cierre: unidades fabricadas ÷ meta del turno.
+- **Operaciones especiales (nov-2026):**
+  - **Revisión va en pareja** (`bh_bloques.pareja`): 2 personas revisan el mismo saco. Se anota
+    una cantidad por hora para la pareja (se guarda igual en las dos) y la meta de Métodos y
+    Tiempos es de la pareja. Las dos quedan con la misma eficiencia.
+  - **Patinador, soplado y perforación de bafles** van con la meta de la línea: solo se ponen los
+    nombres y se califican al cierre (fabricado del turno ÷ meta del turno).
+  - **Pie de máquina** (máximo 2) acompaña al **DD5**: al agregar el DD5 se ofrece agregarlo.
+    Su eficiencia es la del DD5 en el turno (`meta_origen = 'promedio'`, `ref = 'DD5'`).
+  - **Manguita** (`area = 'manguita'`): subárea al final de cada hoja. Se agrega la persona y
+    luego sus operaciones, cada una con la meta que pone el supervisor (un bloque por persona y
+    operación). **Líderes** (máximo 2) con la eficiencia de manguita en el turno.
+  - En Circular el pegue de reata se llama **DD5** (se hace en esa máquina); 4 Panel y U-panel
+    siguen con "Pegue reata".
+  - Mi Marcador cuenta también a los de al cierre y por promedio (vista `mm_bihorario`).
 - **Cierre**: el supervisor escribe a mano las unidades fabricadas de cada código
   (sin precarga). Es obligatorio para terminar.
 - **Polivalencia (opción A)**: si un operario que ya está en el turno se pone en
@@ -236,8 +248,10 @@ El Excel se lee en el computador y solo se suben las columnas que usa la app. No
   - "Agregar referencia" pide el **número de pedido** y toma su código.
   - Si el pedido no está cargado, "Agregar con la referencia" deja escoger el código y guarda el número escrito.
   - El pedido queda en `bh_hojas.pedido`.
-- **Vista Pedidos:** buscas un pedido y salen todos los turnos donde se trabajó, con lo fabricado
-  (lo reportado al terminar el turno, o la salida si sigue abierto), contra la cantidad del pedido.
+- **Vista Pedidos:** buscas un pedido (sin el lote: 9705, no 9705-1) y sale la ficha del pedido
+  (cliente, código, unidades, entrega, saldo y descripción completa) y los turnos donde se trabajó.
+  - **Fabricado = solo lo reportado al terminar el turno en Panel, Circular, 4 Panel y U-panel.**
+    Líneas alternas, Prensa y Liner no cuentan; los turnos en curso suman cuando se terminan.
   - Las referencias agregadas antes, sin pedido, cuentan "por código" solo dentro de las fechas
     del pedido: de 30 días antes de recibirlo a 7 días después de la entrega.
 - **Cargas:**

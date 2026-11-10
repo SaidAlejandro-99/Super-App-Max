@@ -56,11 +56,13 @@ Tarjeta de eficiencia del operario. Es la cara pública de SuperApp Max.
   recarga en Mi Marcador → **Histórico (Excel)**; la carga reemplaza todo lo
   que vino del Excel.
   - Primera carga (21-oct-2026): 54.315 registros, del 20-ene-2025 al 20-oct-2026.
+  - Solo cuenta hasta la fecha de corte (`config.mm_corte_excel`, hoy 20-oct-2026).
+- **Desde el día siguiente al corte**: el Bi-horario, día por día y solo (vista
+  `mm_bihorario`, mismo criterio de la hoja; incluye el turno en curso). Quedan fuera
+  Prensa y Liner (meta por turno) y las filas de más de 200 %.
+- Las funciones de Mi Marcador leen la vista `mm_eficiencia`, que une las dos fuentes.
+- El mes "en curso" es el del último dato; a principio de mes, mientras el ranking
+  tenga menos de 10 personas, se sigue mostrando el mes anterior.
 - **Hoy**: el Bi-horario en línea.
 - **Destacado y frase**: los cambia el admin en Mi Marcador → **Destacado y frase**.
   La foto se reduce a 240 px y se guarda en `config`.
-
-## Pendiente
-
-- Cuando todas las líneas estén en el Bi-horario, alimentar el histórico
-  automáticamente al **Terminar** cada turno y dejar de cargar el Excel.

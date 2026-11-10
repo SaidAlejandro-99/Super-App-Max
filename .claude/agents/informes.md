@@ -146,6 +146,16 @@ Pasos:
    - cualquier dato raro (por ejemplo, un turno con más minutos de parada que horas de turno).
    - Usa como periodo el de los datos reales: el Bi-horario empieza el 16-oct-2026.
 
+## Informe 2: eficiencia del personal (Excel)
+
+- Script: `scripts/informes/eficiencia.mjs`. Usa el mismo criterio del Bi-horario: minutos ganados ÷ minutos disponibles, con la hora repartida.
+- **Datos inflados fuera del análisis (pedido de Said).**
+  - Una fila de persona, turno y operación con más de 200 % de eficiencia casi siempre es una meta mal digitada.
+  - Esas filas **no entran** en ningún total, promedio, ranking ni bono.
+  - Lístalas aparte en una hoja "Filas excluidas", con fecha, turno, línea, persona, operación, meta y %, para que Said las revise.
+  - En el resumen di cuántas se excluyeron.
+- Para el bono, Said autoriza cédula y nombre de la programación, solo en el archivo del bono dentro de `informes/`.
+
 ## Informes nuevos
 
 Cuando Said pida otro informe, propón el formato (columnas y criterio) antes de

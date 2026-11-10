@@ -337,6 +337,24 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 .bh-cierre span{flex:1;min-width:0;display:flex;flex-direction:column}
 .bh-cierre small{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bh-cierre input{width:110px;font-size:18px;text-align:center}
+/* Operaciones al cierre o por promedio, y subárea Manguita */
+.bh-lideres{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13px;margin:6px 0}
+.bh-manguita{border-left:4px solid var(--lime, #c3d35a)}
+.bh-mg-persona{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+.bh-mg-head{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:6px}
+.bh-mg-head b{font-size:15px}
+.bh-mg-acc{margin-left:auto;display:flex;gap:6px}
+.bh-mg-op{display:flex;align-items:center;gap:6px}
+.bh-quitar{flex:none;width:24px;height:24px;border-radius:6px;border:1px solid var(--bad);background:none;color:var(--bad);font-size:12px;line-height:1;cursor:pointer;padding:0}
+.bh-quitar:hover{background:var(--bad);color:#fff}
+/* Ficha del pedido (vista Pedidos) */
+.bh-pedido{padding:12px 14px;margin:10px 0}
+.bh-pedido small{display:block;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
+.bh-pedido-head{display:flex;gap:24px;align-items:flex-end;padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid var(--line)}
+.bh-pedido-head b{font-size:22px}
+.bh-pedido-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px 16px;font-size:13.5px}
+.bh-pedido-grid .full{grid-column:1/-1}
+@media (max-width:640px){.bh-pedido-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .bh-acum .bh-u{font-size:13px}
 /* Fila "Acumulado operación": el acumulado grande, lo de la hora pequeño y gris */
 .bh-acum-total{display:block;font-size:15px;font-weight:700;color:var(--green-soft);line-height:1.1}
