@@ -90,39 +90,150 @@ const opNombre = ced => { const o = CAT.operarios.find(x => x.cedula === ced); r
 const causa = cod => CAT.causas.find(c => c.codigo === cod)
 
 /* ---------- cola de sincronización ---------- */
-const QKEY = 'bh_cola'
-let cola = []; try { cola = JSON.parse(localStorage.getItem(QKEY) || '[]') } catch (e) { cola = [] }
-let enviando = false
-function guardarCola() { try { localStorage.setItem(QKEY, JSON.stringify(cola)) } catch (e) {} pintarSync() }
+// Nada de lo anotado se pierde en silencio:
+// - sin red o con la sesión vencida, el cambio se queda en la cola y se reintenta;
+// - si la base lo rechaza (permisos, turno cerrado…), pasa a la bandeja "No se guardaron",
+//   que se ve en el chip de arriba hasta que alguien lo reintente o lo descarte.
+const QKEY = 'bh_cola', RKEY = 'bh_rechazados'
+const leer = k => { try { return JSON.parse(localStorage.getItem(k) || '[]') } catch (e) { return [] } }
+let cola = leer(QKEY), rechazados = leer(RKEY)
+let enviando = false, sinSesion = false, sinEspacio = false
+function guardarLocal(k, v) {
+  try { localStorage.setItem(k, JSON.stringify(v)); sinEspacio = false; return true }
+  catch (e) {
+    // El celular se quedó sin espacio: se borran las copias de turnos viejos y se intenta otra vez.
+    limpiarCopias(true)
+    try { localStorage.setItem(k, JSON.stringify(v)); sinEspacio = false; return true } catch (e2) { sinEspacio = true; return false }
+  }
+}
+function guardarCola() { guardarLocal(QKEY, cola); pintarSync() }
+function guardarRechazados() { guardarLocal(RKEY, rechazados); pintarSync() }
 function pintarSync() {
   const s = document.getElementById('syncchip'); if (!s) return
-  s.hidden = !cola.length
-  s.textContent = navigator.onLine ? `Sincronizando ${cola.length}…` : `Sin señal · ${cola.length} por enviar`
+  const partes = []
+  if (rechazados.length) partes.push(`⚠ ${rechazados.length} sin guardar`)
+  if (sinSesion && cola.length) partes.push(`Sesión vencida · ${cola.length} por enviar`)
+  else if (cola.length) partes.push(navigator.onLine ? `Sincronizando ${cola.length}…` : `Sin señal · ${cola.length} por enviar`)
+  if (sinEspacio) partes.push('⚠ Celular sin espacio')
+  s.hidden = !partes.length
+  s.textContent = partes.join(' · ')
+  s.classList.toggle('alerta', !!(rechazados.length || sinSesion || sinEspacio))
+  s.style.cursor = rechazados.length || sinSesion ? 'pointer' : ''
+  s.title = rechazados.length ? 'Toca para ver lo que no se guardó' : sinSesion ? 'Toca para volver a entrar' : ''
 }
 const CONFLICTO = { bh_registros: 'asignacion_id,hora' }
-function encolar(tabla, tipo, datos) { cola.push({ tabla, tipo, datos }); guardarCola(); enviar() }
-const esDeRed = err => !navigator.onLine || /fetch|network|Load failed|timeout/i.test((err && (err.message || err.details)) || '')
+const usuarioActual = () => { try { return C.userId ? C.userId() : null } catch (e) { return null } }
+function encolar(tabla, tipo, datos) { cola.push({ tabla, tipo, datos, usuario: usuarioActual(), at: new Date().toISOString() }); guardarCola(); enviar() }
+const textoError = err => ((err && (err.message || err.details || err.hint)) || '') + ''
+const esDeRed = err => !navigator.onLine || /fetch|network|Load failed|timeout/i.test(textoError(err))
+const esDeSesion = r => r.status === 401 || /jwt|token|not authenticated|session/i.test(textoError(r.error)) || r.error.code === 'PGRST301'
+// Mensaje en español para el supervisor.
+function explicar(r) {
+  const t = textoError(r.error)
+  if (r.status === 403 || r.error.code === '42501' || /row-level security|permission denied/i.test(t)) return 'La base no lo permitió: el turno ya está cerrado para edición o no tienes permiso.'
+  if (r.error.code === '23503' || /foreign key/i.test(t)) return 'Falta algo de lo que depende (por ejemplo, la referencia u operación se borró).'
+  if (r.error.code === '23514' || /check constraint/i.test(t)) return 'Un dato no tiene el formato permitido.'
+  return 'La base rechazó el cambio (' + (t || 'error') + ').'
+}
+const TABLA_TXT = { bh_registros: 'casilla de una hora', bh_asignaciones: 'persona en una operación', bh_bloques: 'operación', bh_hojas: 'referencia', bh_turnos: 'datos del turno', bh_pt: 'producción de Prensa/Liner', bh_pt_personas: 'persona de Prensa/Liner', operarios: 'persona' }
 async function enviar() {
   if (enviando) return
   enviando = true
+  let refrescada = false
   try {
     while (cola.length) {
-      const { tabla, tipo, datos } = cola[0]
+      const { tabla, tipo, datos, usuario } = cola[0]
+      // Lo que anotó otro usuario en este celular no se envía a nombre de quien entró ahora.
+      const yo = usuarioActual()
+      if (usuario && yo && usuario !== yo) {
+        rechazados.push({ ...cola[0], error: 'Lo anotó otro usuario en este celular. Que esa persona entre para enviarlo, o reintenta si es correcto.', rechazado_at: new Date().toISOString() })
+        cola.shift(); guardarCola(); guardarRechazados(); continue
+      }
       let r
       if (tipo === 'upsert') r = await C.supabase.from(tabla).upsert(datos, { onConflict: CONFLICTO[tabla] || 'id' })
       else if (tipo === 'update') r = await C.supabase.from(tabla).update(datos.set).match(datos.match)
       else r = await C.supabase.from(tabla).delete().match(datos)
       if (r.error) {
         if (esDeRed(r.error)) break
+        if (esDeSesion(r)) {
+          // Sesión vencida: se renueva una vez y se reintenta; si no se puede, el cambio espera en la cola.
+          if (!refrescada) { refrescada = true; const { error } = await C.supabase.auth.refreshSession(); if (!error) continue }
+          if (!sinSesion) C.toast('Tu sesión venció. Los cambios siguen guardados en este celular: vuelve a entrar para enviarlos.', 8000)
+          sinSesion = true; break
+        }
         console.error(tabla, r.error)
-        C.toast('No se pudo guardar un cambio: ' + (r.error.message || 'error'))
+        rechazados.push({ ...cola[0], error: explicar(r), rechazado_at: new Date().toISOString() })
+        guardarRechazados()
+        C.toast(`No se guardó un cambio (${TABLA_TXT[tabla] || tabla}). Toca el aviso rojo de arriba para revisarlo.`, 8000)
       }
+      sinSesion = false
       cola.shift(); guardarCola()
     }
   } finally { enviando = false; pintarSync() }
 }
 window.addEventListener('online', enviar)
 setInterval(() => { if (cola.length) enviar() }, 20000)
+
+// Bandeja "No se guardaron": reintentar o descartar cada cambio rechazado.
+function modalRechazados() {
+  if (!rechazados.length) { if (sinSesion) C.toast('Vuelve a entrar con tu correo para enviar los cambios pendientes.', 6000); return }
+  const fecha = iso => new Date(iso).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const detalle = x => {
+    const d = x.datos || {}
+    if (x.tabla === 'bh_registros') return `${d.unidades != null ? d.unidades + ' und' : ''}${d.tm_causa ? ' · TM ' + d.tm_causa : ''}${x.tipo === 'delete' ? 'borrar casilla' : ''}`
+    if (x.tabla === 'bh_bloques') return d.operacion || ''
+    if (x.tabla === 'bh_hojas') return d.codigo || ''
+    return x.tipo === 'delete' ? 'borrado' : ''
+  }
+  C.openModal(`<div id="rz-box"><h3>Cambios que no se guardaron</h3>
+    <div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:10px">La base rechazó estos cambios. Siguen aquí para que no se pierdan: reintenta (por ejemplo, después de que el admin reabra el turno) o descártalos si ya no aplican.</div>
+    <div class="tablebox"><table><thead><tr><th>Cuándo</th><th>Qué</th><th>Por qué</th><th></th></tr></thead><tbody>
+      ${rechazados.map((x, i) => `<tr><td class="muted" style="white-space:nowrap">${fecha(x.at || x.rechazado_at)}</td><td>${C.esc(TABLA_TXT[x.tabla] || x.tabla)}<div class="muted" style="font-size:12px">${C.esc(detalle(x))}</div></td><td style="font-size:12.5px">${C.esc(x.error)}</td>
+        <td style="white-space:nowrap"><button class="btn sm go" data-rz="reintentar" data-i="${i}">Reintentar</button> <button class="btn sm ghost danger" data-rz="descartar" data-i="${i}">Descartar</button></td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="modal-actions"><button class="btn ghost danger" data-rz="todo">Descartar todo</button><button class="btn go" data-rz="reintentarTodo">Reintentar todo</button><button class="btn ghost" data-act="closeModal">Cerrar</button></div></div>`, true)
+  document.getElementById('rz-box').addEventListener('click', e => {
+    const b = e.target.closest('[data-rz]'); if (!b) return
+    const accion = b.dataset.rz, i = +b.dataset.i
+    const volver = lista => { cola.push(...lista.map(({ error, rechazado_at, ...x }) => x)); guardarCola(); enviar() }
+    if (accion === 'reintentar') volver(rechazados.splice(i, 1))
+    else if (accion === 'descartar') rechazados.splice(i, 1)
+    else if (accion === 'reintentarTodo') volver(rechazados.splice(0))
+    else if (accion === 'todo') { if (!confirm('¿Descartar todos los cambios que no se guardaron? No se puede deshacer.')) return; rechazados.splice(0) }
+    guardarRechazados(); C.closeModal()
+    if (rechazados.length) modalRechazados()
+    if (T) abrirTurno(T.turno.id)
+  })
+}
+
+// Copias de turnos en el celular: se guardan para trabajar sin señal. Se borran las de
+// turnos de hace más de 3 días que no tengan nada pendiente (o todas las viejas si falta espacio).
+function limpiarCopias(urgente) {
+  try {
+    const pendientes = new Set(cola.map(x => x.datos && (x.datos.turno_id || (x.datos.match && x.datos.match.id) || x.datos.id)))
+    const limite = new Date(); limite.setDate(limite.getDate() - (urgente ? 1 : 3))
+    const lim = limite.toISOString().slice(0, 10)
+    Object.keys(localStorage).filter(k => k.startsWith('bh_turno_')).forEach(k => {
+      const id = k.slice(9)
+      if (pendientes.has(id) || (T && T.turno.id === id)) return
+      let fecha = ''; try { fecha = (JSON.parse(localStorage.getItem(k)).turno || {}).fecha || '' } catch (e) {}
+      if (!fecha || fecha < lim) localStorage.removeItem(k)
+    })
+  } catch (e) {}
+}
+limpiarCopias(false)
+// Al cerrar sesión: avisa si hay cambios sin enviar y borra del celular los datos personales
+// (personal con cédulas y copias de turnos). Devuelve false si el usuario decide no salir.
+export function antesDeSalir() {
+  const n = cola.length + rechazados.length
+  if (n && !confirm(`Hay ${n} cambio(s) del Bi-horario que aún no se han guardado en la base. Si sales, quedan en este celular y se enviarán cuando vuelvas a entrar con tu usuario. ¿Salir igual?`)) return false
+  try {
+    localStorage.removeItem('bh_cat')
+    if (!n) Object.keys(localStorage).filter(k => k.startsWith('bh_turno_')).forEach(k => localStorage.removeItem(k))
+  } catch (e) {}
+  CAT.cargado = false; CAT.operarios = []; T = null
+  return true
+}
 
 /* ---------- carga ---------- */
 async function cargarCatalogos() {
@@ -164,7 +275,7 @@ async function cargarTurno(id) {
       s.from('bh_hojas').select('*').eq('turno_id', id).order('orden'),
       s.from('bh_bloques').select('*').eq('turno_id', id).order('orden'),
       s.from('bh_asignaciones').select('*').eq('turno_id', id).order('orden'),
-      s.from('bh_registros').select('*').eq('turno_id', id),
+      todas(() => s.from('bh_registros').select('*').eq('turno_id', id), ['asignacion_id', 'hora']),
       s.from('bh_pt').select('*').eq('turno_id', id).order('created_at'),
       s.from('bh_pt_personas').select('*').eq('turno_id', id).order('orden'),
     ])
@@ -185,7 +296,7 @@ async function cargarTurno(id) {
 }
 function guardarCopia() {
   if (!T) return
-  try { localStorage.setItem('bh_turno_' + T.turno.id, JSON.stringify({ ...T, regs: [...T.regs.values()] })) } catch (e) {}
+  if (!guardarLocal('bh_turno_' + T.turno.id, { ...T, regs: [...T.regs.values()] })) pintarSync()
 }
 function leerCopia(id) {
   try {
@@ -366,17 +477,21 @@ const CLAVES = { CIRCULAR: ['Pegue tapa', 'Pegue solapa', 'Pegue reata', 'DD5'] 
 const clavesDe = linea => CLAVES[linea] || ['Pegue tapa', 'Pegue solapa']
 const esSalida = op => /^pegue (tapa|solapa)$/i.test(op)
 const pct = v => v == null ? '—' : Math.round(v * 100) + '%'
-const efClase = v => v == null ? '' : v >= 0.95 ? 'ef-ok' : v >= 0.8 ? 'ef-med' : 'ef-bajo'
+// Más de 150 % casi siempre es una cantidad o una meta mal escrita: se marca con ⚠ para revisarla.
+const efClase = v => v == null ? '' : v > 1.5 ? 'ef-ok ef-raro' : v >= 0.95 ? 'ef-ok' : v >= 0.8 ? 'ef-med' : 'ef-bajo'
 
 /* ---------- entrada del módulo ---------- */
 export function init(ctx) {
   C = ctx
   el = document.getElementById('mod-bh')
   el.addEventListener('click', onClick)
+  const chip = document.getElementById('syncchip')
+  if (chip) chip.addEventListener('click', modalRechazados)
   pintarSync()
 }
 // Al iniciar sesión se vuelven a pedir los catálogos (supervisores, turnos, personal).
-export function alEntrar() { CAT.cargado = false }
+// También se envía lo que quedó pendiente (por ejemplo, si la sesión había vencido).
+export function alEntrar() { CAT.cargado = false; sinSesion = false; pintarSync(); if (cola.length) setTimeout(enviar, 500) }
 export async function show() {
   el.innerHTML = '<div class="loading">Cargando Bi-horario…</div>'
   try { await asegurarCatalogos() } catch (e) { el.innerHTML = '<div class="empty">No se pudo cargar el Bi-horario. Revisa la conexión.</div>'; return }
@@ -388,18 +503,32 @@ export function onM1Ready() { if (vista === 'turno' && T) pintarTurno() }
 
 /* ---------- vista: lista de turnos ---------- */
 // Trae todo lo de los turnos de una fecha para armar el resumen de cada tarjeta.
+// La base entrega como máximo 1000 filas por consulta: se pide por páginas hasta traer todo.
+// (Orden fijo para que las páginas no se crucen; bh_registros no tiene id: su llave es asignación + hora.)
+async function todas(armar, orden = ['id']) {
+  const out = []
+  for (let desde = 0; ; desde += 1000) {
+    let q = armar(); orden.forEach(c => { q = q.order(c) })
+    const { data, error } = await q.range(desde, desde + 999)
+    if (error) return { error }
+    out.push(...data); if (data.length < 1000) return { data: out }
+  }
+}
 async function cargarDia(turnos) {
   const ids = turnos.map(t => t.id); if (!ids.length) return new Map()
   const s = C.supabase
   const [ho, bl, as, rg, pt, pp] = await Promise.all([
-    s.from('bh_hojas').select('*').in('turno_id', ids),
-    s.from('bh_bloques').select('*').in('turno_id', ids),
-    s.from('bh_asignaciones').select('*').in('turno_id', ids),
-    s.from('bh_registros').select('asignacion_id, hora, turno_id, unidades, tm_causa, tm_minutos').in('turno_id', ids).range(0, 19999),
-    s.from('bh_pt').select('*').in('turno_id', ids),
-    s.from('bh_pt_personas').select('*').in('turno_id', ids),
+    todas(() => s.from('bh_hojas').select('*').in('turno_id', ids)),
+    todas(() => s.from('bh_bloques').select('*').in('turno_id', ids)),
+    todas(() => s.from('bh_asignaciones').select('*').in('turno_id', ids)),
+    todas(() => s.from('bh_registros').select('asignacion_id, hora, turno_id, unidades, tm_causa, tm_minutos').in('turno_id', ids), ['asignacion_id', 'hora']),
+    todas(() => s.from('bh_pt').select('*').in('turno_id', ids)),
+    todas(() => s.from('bh_pt_personas').select('*').in('turno_id', ids)),
   ])
-  if (ho.error || bl.error || as.error || rg.error || pt.error || pp.error) return new Map()
+  if (ho.error || bl.error || as.error || rg.error || pt.error || pp.error) {
+    C.toast('No se pudieron traer todos los datos del día. Revisa la señal y vuelve a intentar.', 6000)
+    return new Map()
+  }
   const m = new Map()
   turnos.forEach(t => m.set(t.id, { turno: t, hojas: ho.data.filter(x => x.turno_id === t.id), bloques: bl.data.filter(x => x.turno_id === t.id), asig: as.data.filter(x => x.turno_id === t.id), regs: new Map(),
     pt: pt.data.filter(x => x.turno_id === t.id), ptp: pp.data.filter(x => x.turno_id === t.id) }))
@@ -719,10 +848,10 @@ function resumenPendientesAdmin(ts) {
 function modalNuevoTurno() {
   const p = C.perfil() || {}
   const sups = CAT.supervisores.filter(s => s.activo)
-  const opt = (sel) => `<option value="">—</option>` + sups.map(s => `<option value="${s.cedula}" ${s.cedula === sel ? 'selected' : ''}>${C.esc(nombreCorto(s.nombre))}</option>`).join('')
+  const opt = (sel) => `<option value="">—</option>` + sups.map(s => `<option value="${C.esc(s.cedula)}" ${s.cedula === sel ? 'selected' : ''}>${C.esc(nombreCorto(s.nombre))}</option>`).join('')
   C.openModal(`<h3>Abrir turno</h3>
     <div class="field"><label>Fecha (los turnos de noche llevan la fecha en que inician)</label><input type="date" id="nt-fecha" value="${fechaLista}"></div>
-    <div class="field"><label>Turno</label><select id="nt-turno">${CAT.turnos.map(t => `<option value="${t.codigo}">${C.esc(turnoTxt(t.codigo))}</option>`).join('')}</select></div>
+    <div class="field"><label>Turno</label><select id="nt-turno">${CAT.turnos.map(t => `<option value="${C.esc(t.codigo)}">${C.esc(turnoTxt(t.codigo))}</option>`).join('')}</select></div>
     <div class="field"><label>Línea</label><select id="nt-linea">${LINEAS.map(l => `<option value="${l.v}">${l.t}</option>`).join('')}</select></div>
     <div class="field"><label>Supervisor</label><select id="nt-sup">${opt(p.supervisor_cedula)}</select></div>
     <div class="field"><label>Segundo supervisor (opcional)</label><select id="nt-sup2">${opt('')}</select></div>
@@ -891,7 +1020,7 @@ function modalPersonasPT() {
     const n = q.trim().toLowerCase()
     const lista = CAT.operarios.filter(o => o.activo && !ya.has(o.cedula) && (!n || (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)))
       .sort((x, y) => (prio.puntaje(y) - prio.puntaje(x)) || x.nombre.localeCompare(y.nombre)).slice(0, 150)
-    document.getElementById('pp-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegidos.has(o.cedula) ? 'on' : ''}" data-ced="${o.cedula}">
+    document.getElementById('pp-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegidos.has(o.cedula) ? 'on' : ''}" data-ced="${C.esc(o.cedula)}">
       <td style="width:30px"><input type="checkbox" ${elegidos.has(o.cedula) ? 'checked' : ''} tabindex="-1"></td>
       <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div><div style="margin-top:2px">${prio.etiquetas(o)}</div></td>
       <td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}</td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
@@ -982,7 +1111,7 @@ function modalFueraPT(ced) {
     <div class="hint" style="color:var(--muted);font-size:12.5px;margin-bottom:10px">El tiempo que no estuvo en ${T.turno.linea === 'PRENSA' ? 'prensa' : 'liner'} (por ejemplo, no había sacos y se fue a manualidad). No le cuenta en contra.</div>
     <div class="field"><label>Minutos</label><div class="bh-chips" id="fu-min">${[0, 30, 60, 120, 180, 240].map(m => `<button type="button" class="bh-chip ${m === min ? 'on' : ''}" data-m="${m}">${m === 0 ? 'Nada' : m < 60 ? m + ' min' : m / 60 + ' h'}</button>`).join('')}
       <input type="number" id="fu-x" min="0" max="720" step="5" placeholder="otro" style="width:80px" value="${[0, 30, 60, 120, 180, 240].includes(min) ? '' : min}"></div></div>
-    <div class="field"><label>Motivo</label><div class="bh-chips" id="fu-cau">${rapidas.map(c => `<button type="button" class="bh-chip ${c.tipo} ${c.codigo === cau ? 'on' : ''}" data-c="${c.codigo}">${C.esc(c.corta || c.descripcion)}</button>`).join('')}</div></div>
+    <div class="field"><label>Motivo</label><div class="bh-chips" id="fu-cau">${rapidas.map(c => `<button type="button" class="bh-chip ${c.tipo} ${c.codigo === cau ? 'on' : ''}" data-c="${C.esc(c.codigo)}">${C.esc(c.corta || c.descripcion)}</button>`).join('')}</div></div>
     <div class="field"><label>Nota (opcional)</label><input type="text" id="fu-nota" value="${C.esc(p.nota || '')}" placeholder="Ej: apoyo en corte"></div>
     <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="fu-ok">Guardar</button></div>`)
   const marcar = () => {
@@ -1271,10 +1400,11 @@ function modalCelda(asigId, h) {
         <input type="number" id="ce-u" inputmode="numeric" enterkeyhint="next" min="0" step="1" class="bh-num" value="${r.unidades ?? ''}" placeholder="0">
         <button class="btn" id="ce-ok" title="Guardar y cerrar">✓ Guardar</button>
         <button class="btn go" id="ce-sig" title="Guardar y pasar a la siguiente persona">Siguiente ↓</button>
-      </div></div>
+      </div>
+      <div class="bh-alerta" id="ce-alerta" hidden></div></div>
     <div class="field"><label>Tiempo muerto o novedad (opcional)</label>
-      <div class="bh-chips" id="ce-tm">${rapidas.map(c => `<button type="button" class="bh-chip ${c.tipo} ${tmSel === c.codigo ? 'on' : ''}" data-c="${c.codigo}">${C.esc(c.corta || c.descripcion)}</button>`).join('')}</div>
-      <select id="ce-otra" style="margin-top:8px"><option value="">Otras causas…</option>${otras.map(c => `<option value="${c.codigo}" ${tmSel === c.codigo ? 'selected' : ''}>${c.codigo} · ${C.esc(c.descripcion)}</option>`).join('')}</select>
+      <div class="bh-chips" id="ce-tm">${rapidas.map(c => `<button type="button" class="bh-chip ${c.tipo} ${tmSel === c.codigo ? 'on' : ''}" data-c="${C.esc(c.codigo)}">${C.esc(c.corta || c.descripcion)}</button>`).join('')}</div>
+      <select id="ce-otra" style="margin-top:8px"><option value="">Otras causas…</option>${otras.map(c => `<option value="${C.esc(c.codigo)}" ${tmSel === c.codigo ? 'selected' : ''}>${C.esc(c.codigo)} · ${C.esc(c.descripcion)}</option>`).join('')}</select>
     </div>
     <div class="field" id="ce-minbox" ${tmSel ? '' : 'hidden'}><label>Minutos</label>
       <div class="bh-chips" id="ce-min">${[15, 30, 45, 60].map(m => `<button type="button" class="bh-chip ${minSel === m ? 'on' : ''}" data-m="${m}">${m === 60 ? 'Hora completa' : m + ' min'}</button>`).join('')}
@@ -1291,12 +1421,32 @@ function modalCelda(asigId, h) {
     document.getElementById('ce-otra').value = CAT.causas.some(c => !c.rapida && c.codigo === tmSel) ? tmSel : ''
     document.getElementById('ce-minbox').hidden = !tmSel
     document.querySelectorAll('#ce-min .bh-chip').forEach(x => x.classList.toggle('on', +x.dataset.m === minSel))
+    revisar()
   }
   document.getElementById('ce-tm').addEventListener('click', e => { const x = e.target.closest('[data-c]'); if (!x) return; tmSel = tmSel === x.dataset.c ? '' : x.dataset.c; marcar() })
   document.getElementById('ce-otra').addEventListener('change', e => { tmSel = e.target.value; marcar() })
   document.getElementById('ce-min').addEventListener('click', e => { const x = e.target.closest('[data-m]'); if (!x) return; minSel = +x.dataset.m; document.getElementById('ce-minx').value = ''; marcar() })
   document.getElementById('ce-minx').addEventListener('input', e => { const v = Math.max(1, Math.min(60, +e.target.value || 0)); if (v) { minSel = v; marcar() } })
+  // Cantidad rara: si pasa del 150 % de la meta de esa hora (descontando el tiempo muerto),
+  // se avisa y hay que tocar Guardar otra vez para confirmar. Casi siempre es un dedo de más (150 en vez de 15).
+  const metaH = b.meta_hora && !sinHoras(b) ? +b.meta_hora * (b.pareja ? 1 : (+a.factor || 1)) : null
+  let confirmada = null
+  const revisar = () => {
+    const uv = inp.value === '' ? null : +inp.value
+    const tmMin = tmSel && (causa(tmSel) || {}).tipo !== 'tardanza' ? minSel : 0
+    const esperado = metaH ? metaH * Math.max(0, 60 - tmMin) / 60 : null
+    const pct = uv && esperado ? uv / esperado : uv && metaH ? Infinity : null
+    const al = document.getElementById('ce-alerta')
+    const rara = pct != null && pct > 1.5
+    al.hidden = !rara
+    if (rara) al.innerHTML = `⚠ <b>${C.fmt0(uv)}</b> es ${pct === Infinity ? 'mucho más de lo posible' : `el <b>${Math.round(pct * 100)} %</b>`} de la meta de esta hora (${C.fmt(esperado || 0, 1)}). Revisa que esté bien escrito.${confirmada === uv ? '' : ' Si es correcto, toca Guardar otra vez.'}`
+    return { uv, rara }
+  }
+  inp.addEventListener('input', () => { confirmada = null; revisar() })
+  revisar()
   const guardar = () => {
+    const { uv: crudo, rara } = revisar()
+    if (rara && confirmada !== crudo) { confirmada = crudo; revisar(); inp.focus(); inp.select(); return false }
     const uv = inp.value === '' ? null : Math.max(0, +inp.value)
     const nota = document.getElementById('ce-nota').value.trim()
     if (uv == null && !tmSel && !nota) { borrar(); return true }
@@ -1306,9 +1456,10 @@ function modalCelda(asigId, h) {
   }
   const pareja = b.pareja ? T.asig.filter(x => x.bloque_id === b.id).map(x => x.id) : [asigId]
   const borrar = () => pareja.forEach(id => { if (T.regs.has(id + '|' + h)) cambio('bh_registros', 'delete', { asignacion_id: id, hora: h }) })
-  document.getElementById('ce-ok').addEventListener('click', () => { guardar(); C.closeModal(); pintarTurno() })
+  document.getElementById('ce-ok').addEventListener('click', () => { if (!guardar()) return; C.closeModal(); pintarTurno() })
   document.getElementById('ce-sig').addEventListener('click', () => {
-    guardar(); C.closeModal(); pintarTurno()
+    if (!guardar()) return
+    C.closeModal(); pintarTurno()
     // Siguiente persona del mismo bloque en la misma hora; si era la última, el primero del siguiente bloque.
     // (De una pareja solo se pasa por la primera; los que van al cierre o por promedio no tienen casillas.)
     const orden = T.bloques.filter(x => x.hoja_id === b.hoja_id && !sinHoras(x)).sort((x, y) => x.orden - y.orden)
@@ -1553,7 +1704,7 @@ function modalMismasPersonas(bloqueId, previa, despues) {
   const elegidos = new Set(previa.asig.map(a => a.cedula))
   C.openModal(`<h3>¿Las mismas personas?</h3>
     <div class="hint" style="color:var(--muted);font-size:13px;margin-bottom:10px">En <b class="mono">${C.esc(previa.hoja.codigo)}</b> estaban estas personas en <b>${C.esc(b.operacion)}</b>. Quita a quien no siga y agrégalas de una vez.</div>
-    <div class="hlist" id="mp-res"><table><tbody>${previa.asig.map(a => `<tr class="bh-pick on" data-ced="${a.cedula}">
+    <div class="hlist" id="mp-res"><table><tbody>${previa.asig.map(a => `<tr class="bh-pick on" data-ced="${C.esc(a.cedula)}">
       <td style="width:30px"><input type="checkbox" checked tabindex="-1"></td>
       <td>${C.esc(opNombre(a.cedula))}${+a.factor < 1 ? ` <span class="muted" style="font-size:11.5px">· meta al ${Math.round(a.factor * 100)} %</span>` : ''}</td></tr>`).join('')}</tbody></table></div>
     <div class="modal-actions" style="justify-content:space-between">
@@ -1599,7 +1750,7 @@ function modalPersonas(bloqueId, despues) {
     const n = q.trim().toLowerCase()
     const lista = CAT.operarios.filter(o => o.activo && !ya.has(o.cedula) && (!n || (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)))
       .sort((x, y) => (prio.puntaje(y) - prio.puntaje(x)) || x.nombre.localeCompare(y.nombre)).slice(0, 150)
-    document.getElementById('pe-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegidos.has(o.cedula) ? 'on' : ''}" data-ced="${o.cedula}">
+    document.getElementById('pe-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegidos.has(o.cedula) ? 'on' : ''}" data-ced="${C.esc(o.cedula)}">
       <td style="width:30px"><input type="checkbox" ${elegidos.has(o.cedula) ? 'checked' : ''} tabindex="-1"></td>
       <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div><div style="margin-top:2px">${prio.etiquetas(o)}</div></td>
       <td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}<br>${C.esc(o.operacion_base || '')}</td>
@@ -1678,7 +1829,7 @@ function modalManguita(cedFija, bloqueEditar) {
       const n = q.trim().toLowerCase()
       const lista = CAT.operarios.filter(o => o.activo && (!n || (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)))
         .sort((x, y) => (prio.puntaje(y) - prio.puntaje(x)) || x.nombre.localeCompare(y.nombre)).slice(0, 100)
-      document.getElementById('mg-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${o.cedula === ced ? 'on' : ''}" data-ced="${o.cedula}">
+      document.getElementById('mg-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${o.cedula === ced ? 'on' : ''}" data-ced="${C.esc(o.cedula)}">
         <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div><div style="margin-top:2px">${prio.etiquetas(o)}</div></td>
         <td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}</td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
     }
@@ -1740,7 +1891,7 @@ function modalEditarPersona(asigId) {
     const n = q.trim().toLowerCase()
     if (!n) { document.getElementById('ep-res').innerHTML = '<div class="empty" style="padding:12px">Escribe para buscar.</div>'; return }
     const lista = CAT.operarios.filter(o => o.activo && o.cedula !== a.cedula && !ocupados.has(o.cedula) && (o.nombre + ' ' + o.cedula).toLowerCase().includes(n)).slice(0, 60)
-    document.getElementById('ep-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegido === o.cedula ? 'on' : ''}" data-ced="${o.cedula}">
+    document.getElementById('ep-res').innerHTML = `<table><tbody>${lista.map(o => `<tr class="bh-pick ${elegido === o.cedula ? 'on' : ''}" data-ced="${C.esc(o.cedula)}">
       <td>${C.esc(nombreCorto(o.nombre))}<div class="muted" style="font-size:11.5px">${C.esc(o.nombre)}</div></td><td class="muted" style="font-size:12px">${C.esc(lineaTxt(o.linea))}</td></tr>`).join('') || '<tr><td class="empty">Sin resultados</td></tr>'}</tbody></table>`
   }
   draw('')
@@ -1762,10 +1913,10 @@ function modalEditarPersona(asigId) {
 function modalEditarTurno() {
   const t = T.turno
   const sups = CAT.supervisores.filter(s => s.activo || s.cedula === t.supervisor_cedula || s.cedula === t.supervisor2_cedula)
-  const opt = sel => `<option value="">—</option>` + sups.map(s => `<option value="${s.cedula}" ${s.cedula === sel ? 'selected' : ''}>${C.esc(nombreCorto(s.nombre))}</option>`).join('')
+  const opt = sel => `<option value="">—</option>` + sups.map(s => `<option value="${C.esc(s.cedula)}" ${s.cedula === sel ? 'selected' : ''}>${C.esc(nombreCorto(s.nombre))}</option>`).join('')
   C.openModal(`<h3>Editar turno</h3>
     <div class="field"><label>Fecha</label><input type="date" id="et-fecha" value="${t.fecha}"></div>
-    <div class="field"><label>Turno</label><select id="et-turno">${CAT.turnos.map(x => `<option value="${x.codigo}" ${x.codigo === t.turno ? 'selected' : ''}>${C.esc(turnoTxt(x.codigo))}</option>`).join('')}</select></div>
+    <div class="field"><label>Turno</label><select id="et-turno">${CAT.turnos.map(x => `<option value="${C.esc(x.codigo)}" ${x.codigo === t.turno ? 'selected' : ''}>${C.esc(turnoTxt(x.codigo))}</option>`).join('')}</select></div>
     <div class="field"><label>Línea</label><select id="et-linea">${LINEAS.map(l => `<option value="${l.v}" ${l.v === t.linea ? 'selected' : ''}>${l.t}</option>`).join('')}</select></div>
     <div class="field"><label>Supervisor</label><select id="et-sup">${opt(t.supervisor_cedula)}</select></div>
     <div class="field"><label>Segundo supervisor (opcional)</label><select id="et-sup2">${opt(t.supervisor2_cedula)}</select></div>

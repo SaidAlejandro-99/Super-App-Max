@@ -143,7 +143,11 @@ td.num,th.num{text-align:right;font-family:"IBM Plex Mono",monospace;font-varian
 .notice{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(16px + env(safe-area-inset-bottom,0px));
   background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:9px;font-size:13px;font-weight:600;
   box-shadow:0 6px 24px rgba(0,0,0,.25);z-index:50;opacity:0;transition:opacity .2s;pointer-events:none}
-.notice.show{opacity:1}
+.notice.show{opacity:1;pointer-events:auto;cursor:pointer}
+.notice{max-width:min(92vw,560px);text-align:center}
+.ef-raro:not(i)::after{content:" ⚠";color:var(--amber)}
+.bh-alerta{margin-top:8px;padding:8px 10px;border-radius:8px;border:1px solid var(--amber);background:color-mix(in srgb,var(--amber) 14%,transparent);font-size:13px;line-height:1.4}
+.tb-role.alerta{background:var(--bad);border-color:var(--bad);color:#fff}
 
 /* modal */
 .modal-bg{position:fixed;inset:0;background:rgba(10,16,12,.55);display:none;align-items:flex-start;justify-content:center;z-index:40;padding:20px 14px;overflow:auto}

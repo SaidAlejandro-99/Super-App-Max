@@ -146,7 +146,9 @@ async function saveOperacion(rec) {
 
 /* ---------- toast / modal ---------- */
 let toastT = null
-function toast(msg) { const n = document.getElementById('notice'); n.textContent = msg; n.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => n.classList.remove('show'), 2600) }
+// Aviso abajo de la pantalla. Los avisos importantes duran más (ms); tocar el aviso lo cierra.
+function toast(msg, ms = 2600) { const n = document.getElementById('notice'); n.textContent = msg; n.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => n.classList.remove('show'), ms) }
+document.getElementById('notice').addEventListener('click', e => e.currentTarget.classList.remove('show'))
 function openModal(html, wide) { const m = document.getElementById('modal'); m.innerHTML = html; m.classList.toggle('wide', !!wide); document.getElementById('modalBg').classList.add('open') }
 function closeModal() { try { clearInterval(swTimer) } catch (e) {} swRunning = false; document.getElementById('modalBg').classList.remove('open') }
 document.getElementById('modalBg').addEventListener('click', e => { if (e.target.id === 'modalBg') closeModal() })
@@ -278,7 +280,7 @@ async function bhDescartar(i) {
   if (!(await bhGuardarDescartes())) { volver ? BH.descartes.add(k) : BH.descartes.delete(k); return }
   const tr = document.querySelector(`[data-act="bhDescartar"][data-arg="${i}"]`)?.closest('tr')
   if (tr) tr.remove()
-  toast(volver ? `${f.operacion} de ${f.codigo} vuelve a la lista.` : `${f.operacion} de ${f.codigo} descartado. Lo recuperas en el filtro "Descartados".`)
+  toast(volver ? `${f.operacion} de ${esc(f.codigo)} vuelve a la lista.` : `${f.operacion} de ${esc(f.codigo)} descartado. Lo recuperas en el filtro "Descartados".`)
 }
 const BH_ESTADO = {
   sin: ['no', 'Sin estudio', 'No tiene tiempo: con esto lo llenas.'],
@@ -395,7 +397,7 @@ function bhActualizar(i) {
     if (await saveTiempos(f.codigo, rows, { sinRepintar: true })) {
       // Operación nueva en el código: puede que le falten otras de costura, así que queda por confirmar.
       if (!f.actuales.length) await marcarPorConfirmar(f.codigo, true)
-      closeModal(); toast(`${f.operacion} de ${f.codigo}: ${fmt(te)} min (${fmt(60 / te, 1)}/h).${!f.actuales.length ? ' El código queda incompleto hasta que confirmes sus operaciones.' : ''}`)
+      closeModal(); toast(`${f.operacion} de ${esc(f.codigo)}: ${fmt(te)} min (${fmt(60 / te, 1)}/h).${!f.actuales.length ? ' El código queda incompleto hasta que confirmes sus operaciones.' : ''}`)
       // Solo se marca esa fila: la lista no se reordena ni salta, para seguir operación por operación.
       const tr = document.querySelector(`[data-act="bhActualizar"][data-arg="${i}"]`)?.closest('tr')
       if (tr) {
@@ -955,7 +957,7 @@ let curMod = 'm1'
 // Lo que los otros módulos necesitan de este archivo.
 const ctx = {
   supabase, toast, openModal, closeModal, esc, fmt, fmt0, downloadBlob,
-  role: () => ROLE, perfil: () => PERFIL,
+  role: () => ROLE, perfil: () => PERFIL, userId: () => sesionActual && sesionActual.user.id,
   // Desde el Bi-horario: abre el Mi Marcador de un operario.
   verMarcador: ced => { marcador.seleccionar(ced); setModule('mm') },
   m1: { ready: () => dbReady, codigos, codeInfo, tiemposOf, tipoOf, opList, planning: () => D.planning },
@@ -1043,7 +1045,7 @@ document.getElementById('login-forgot').addEventListener('click', () => {
   const n = document.getElementById('login-note')
   n.innerHTML = 'Para restablecer tu contraseña, escríbele a <b>Said Meléndez</b>: <b>said.melendez@poliplastics.com</b>'; n.hidden = false
 })
-document.getElementById('logoutBtn').addEventListener('click', () => supabase.auth.signOut())
+document.getElementById('logoutBtn').addEventListener('click', () => { if (bihorario.antesDeSalir()) supabase.auth.signOut() })
 
 let sesionActual = null
 supabase.auth.onAuthStateChange((_evt, session) => {
