@@ -257,6 +257,19 @@ nav.tabs button[aria-selected="true"]{color:var(--fg)}
 .bh-hoja b{font-size:13px}
 .bh-hoja span{color:var(--muted);max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bh-hoja.on{border-color:var(--green);box-shadow:inset 0 -3px 0 var(--green)}
+/* Hojas de referencia: cada una con su color; la abierta se rellena y resalta. */
+.bh-hoja.ref{border-left:4px solid var(--hc)}
+.bh-hoja.ref.on{border-color:var(--hc);border-left-width:4px;background:color-mix(in srgb,var(--hc) 7%,var(--surface));box-shadow:inset 0 -3px 0 var(--hc)}
+.bh-tab-ped{font-style:normal;font-weight:600;font-size:12px;color:var(--fg)}
+.bh-banda{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:10px 0 2px;padding-left:10px;border-left:3px solid var(--hc);font-size:13px;color:var(--muted)}
+.bh-banda b{color:var(--fg)}
+/* Revisión del turno (mesas) */
+.bh-revision{margin-top:14px;border:2px solid var(--lime);padding:12px}
+.bh-revision > .bh-bloque{margin-top:10px}
+.bh-mesas-n .bh-chip{min-width:56px;font-size:18px;font-weight:700;padding:8px 0}
+.bh-mesa-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bh-mesa-meta label{width:100%}
+.bh-mesa-meta input{width:140px}
 .bh-hoja.add{justify-content:center;align-items:center;color:var(--green-soft);font-weight:700;border-style:dashed;min-width:130px}
 .bh-bloque{padding:12px}
 .bh-bloque.cuello{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber)}

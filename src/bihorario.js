@@ -381,6 +381,14 @@ const vaAlCierre = n => /^(patinador|soplado|perforaci[oó]n bafles)$/i.test(n |
 // Bloques que no se anotan hora a hora (meta del turno o promedio del grupo).
 const sinHoras = b => b.meta_origen === 'turno' || b.meta_origen === 'promedio'
 const MAX_PERSONAS = b => b.pareja || b.operacion === PIE || b.operacion === LIDER ? 2 : Infinity
+// Mesas de revisión (desde nov-2026): la revisión es del turno, no de una referencia. De 1 a 3 mesas,
+// cada una en pareja, con su parte de la meta del turno. El bloque vive en una hoja (la base lo pide),
+// pero se muestra aparte, en "Revisión del turno", en todas las hojas.
+const esMesa = b => b.meta_origen === 'mesa'
+const nombreBloque = b => esMesa(b) ? `${b.operacion} · Mesa ${b.mesa}` : b.operacion
+const mesasDe = (X = T) => X.bloques.filter(esMesa).sort((a, b) => a.mesa - b.mesa)
+const horasDelTurno = () => horasTurno(T.turno.turno, T.turno.fecha).length || 1
+const metaHoraMesa = sacos => Math.round(sacos / horasDelTurno() * 10) / 10
 // Eficiencia de un grupo en el turno: la del DD5 (ref = nombre de la operación) o la de manguita.
 function efPromedio(X, ref) {
   let tot = 0, esp = 0
@@ -458,10 +466,11 @@ function resumenOperaciones(X = T) {
   bloques.forEach(b => {
     const r = resumenBloque(b, X)
     // Lo de manguita va aparte de las operaciones de la línea.
-    const nombre = (b.area === MANGUITA && b.operacion !== LIDER ? 'Manguita · ' : '') + b.operacion
+    const nombre = (b.area === MANGUITA && b.operacion !== LIDER ? 'Manguita · ' : '') + nombreBloque(b)
     let o = ops.get(nombre)
     if (!o) { o = { operacion: nombre, porHora: slots.map(() => 0), hojasHora: slots.map(() => new Set()), personas: new Set(), esperado: 0, conMeta: false, turnoMeta: false, efFija: null }; ops.set(nombre, o) }
-    slots.forEach(({ i }) => { if (r.porHora[i]) { o.porHora[i] += r.porHora[i]; o.hojasHora[i].add(b.hoja_id) } })
+    // Las mesas de revisión son de todo el turno: no se pintan con el color de una referencia.
+    slots.forEach(({ i }) => { if (r.porHora[i]) { o.porHora[i] += r.porHora[i]; if (!esMesa(b)) o.hojasHora[i].add(b.hoja_id) } })
     r.asig.forEach(a => o.personas.add(a.cedula))
     if (sinHoras(b)) { o.turnoMeta = true; o.efFija = r.ef }
     else if (r.esperado) { o.esperado += r.esperado; o.conMeta = true }
@@ -1008,7 +1017,7 @@ function pintarTurno() {
   <div class="bh-hojas">
     ${T.hojas.length ? `<button class="bh-hoja vista ${vistaTurno === 'general' ? 'on' : ''}" data-a="vistaGeneral"><b>▦ Vista general</b><span>Todo el turno por operación</span></button>` : ''}
     ${T.asig.length ? `<button class="bh-hoja vista ${vistaTurno === 'personas' ? 'on' : ''}" data-a="vistaPersonas"><b>% Eficiencia por persona</b><span>Cómo va cada operario</span></button>` : ''}
-    ${T.hojas.map((h, i) => { const c = C.m1.codeInfo(h.codigo); return `<button class="bh-hoja ${vistaTurno === 'hojas' && h.id === hojaActual ? 'on' : ''}" data-a="hoja" data-id="${h.id}" style="border-left:4px solid ${COLORES[i % COLORES.length]}"><b class="mono">${C.esc(h.codigo)}</b><span>${C.esc(c.cliente || '')}${h.pedido ? ` · Pedido ${C.esc(h.pedido)}` : ''}</span></button>` }).join('')}
+    ${T.hojas.map((h, i) => { const c = C.m1.codeInfo(h.codigo); return `<button class="bh-hoja ref ${vistaTurno === 'hojas' && h.id === hojaActual ? 'on' : ''}" data-a="hoja" data-id="${h.id}" style="--hc:${COLORES[i % COLORES.length]}"><b class="mono">${C.esc(h.codigo)}</b><span>${C.esc(c.cliente || '')}</span>${h.pedido ? `<em class="bh-tab-ped">Pedido ${C.esc(h.pedido)}</em>` : ''}</button>` }).join('')}
     ${ed ? '<button class="bh-hoja add" data-a="referencia">+ Referencia</button>' : ''}
   </div>
   ${vistaTurno === 'personas' && T.asig.length ? pintarPersonas()
@@ -1272,7 +1281,7 @@ function pintarPersonas() {
       const c = g.tm_causa && causa(g.tm_causa)
       if (c && c.tipo !== 'tardanza') p.tmHora.set(h.i, Math.max(p.tmHora.get(h.i) || 0, +g.tm_minutos || 0))
     })
-    p.ops.push({ operacion: b.operacion, ef: r.ef, total: r.total, turno: sinHoras(b) })
+    p.ops.push({ operacion: nombreBloque(b), ef: r.ef, total: r.total, turno: sinHoras(b) })
     p.total += r.total
     if (r.esperado) { p.esperado += r.esperado; p.soloTurno = false }
     else if (sinHoras(b) && r.ef != null) (p.especiales = p.especiales || []).push(r.ef)
@@ -1309,7 +1318,7 @@ function pintarPersonas() {
 
 function pintarHoja(hoja, ed) {
   const horas = horasTurno(T.turno.turno, T.turno.fecha)
-  const todos = T.bloques.filter(b => b.hoja_id === hoja.id).sort((a, b) => a.orden - b.orden)
+  const todos = T.bloques.filter(b => b.hoja_id === hoja.id && !esMesa(b)).sort((a, b) => a.orden - b.orden)
   const bloques = todos.filter(b => b.area !== MANGUITA)
   const res = new Map(todos.map(b => [b.id, resumenBloque(b)]))
   const conGente = bloques.filter(b => res.get(b.id).asig.length && res.get(b.id).total > 0)
@@ -1328,7 +1337,8 @@ function pintarHoja(hoja, ed) {
   })
   return `
   <div class="bh-hoja-bar">
-    <div class="hint" style="margin:0">${C.esc([c.descripcion, c.linea ? 'Línea ' + c.linea : ''].filter(Boolean).join(' · '))}</div>
+    <div class="bh-banda" style="--hc:${colorHoja.get(hoja.id)};margin:0"><b class="mono">${C.esc(hoja.codigo)}</b>${hoja.pedido ? `<span>· Pedido <b>${C.esc(hoja.pedido)}</b></span>` : ''}
+      <span>· ${C.esc([c.descripcion, c.linea ? 'Línea ' + c.linea : ''].filter(Boolean).join(' · '))}</span></div>
     <div class="controls" style="margin:0">
       ${ed ? `<button class="btn sm ghost" data-a="editarHoja" data-id="${hoja.id}">✎ Cambiar código</button>` : ''}
       ${mapa ? botonProyeccion() : ''}
@@ -1338,8 +1348,96 @@ function pintarHoja(hoja, ed) {
   ${cuello ? `<div class="banner bh-cuello">Cuello de botella: <b>${C.esc(cuello.operacion)}</b> con ${C.fmt0(res.get(cuello.id).total)} sacos acumulados.</div>` : ''}
   ${mapa ? tablaMapa(filasMapa(), horas, colorHoja, true) : bloques.map(b => pintarBloque(b, res.get(b.id), horas, ed, cuello && cuello.id === b.id, bloques)).join('')}
   ${ed ? `<div class="controls" style="margin-top:14px"><button class="btn go" data-a="operacion">+ Operación</button></div>` : ''}
+  ${pintarRevision(ed)}
   ${pintarManguita(hoja, todos.filter(b => b.area === MANGUITA), res, horas, ed)}
   ${ed ? `<div class="controls" style="margin-top:14px"><button class="btn ghost danger" data-a="quitarHoja">Quitar esta referencia</button></div>` : ''}`
+}
+
+/* ---------- Revisión del turno (mesas) ---------- */
+// Se ve igual en todas las hojas: revisa los sacos de todas las referencias del turno.
+function pintarRevision(ed) {
+  const mesas = mesasDe()
+  if (!mesas.length) return ''
+  const horas = horasTurno(T.turno.turno, T.turno.fecha)
+  const suma = mesas.reduce((s, b) => s + (+b.meta_mesa || 0), 0)
+  return `
+  <div class="section bh-revision">
+    <div class="bh-bloque-head">
+      <div><h2 style="margin:0">Revisión del turno</h2>
+        <div class="hint" style="margin:0">Revisan los sacos de <b>todas las referencias</b> del turno. Meta del turno <b>${C.fmt0(T.turno.meta_turno || 0)}</b> repartida en ${mesas.length} ${mesas.length === 1 ? 'mesa' : 'mesas'}: ${mesas.map(b => `Mesa ${b.mesa} <b>${C.fmt0(b.meta_mesa)}</b>`).join(' · ')}${T.turno.meta_turno && suma !== +T.turno.meta_turno ? ' · <b class="bajo">no suma la meta del turno</b>' : ''}</div></div>
+      ${ed ? '<div class="controls" style="margin:0"><button class="btn sm ghost" data-a="mesas">✎ Mesas y metas</button></div>' : ''}
+    </div>
+    ${mesas.map(b => pintarBloque(b, resumenBloque(b), horas, ed, false)).join('')}
+  </div>`
+}
+// Elegir cuántas mesas (1 a 3) y repartir entre ellas la meta del turno.
+function modalMesas() {
+  const total = +T.turno.meta_turno || 0
+  if (!total) { C.toast('Primero escribe la meta del turno (arriba, en ✎).'); return }
+  const antes = mesasDe()
+  let n = antes.length || 1
+  const igual = k => { const base = Math.floor(total / k); return Array.from({ length: k }, (_, j) => base + (j === 0 ? total - base * k : 0)) }
+  let metas = antes.length ? antes.map(b => +b.meta_mesa || 0) : igual(1)
+  C.openModal(`<h3>Mesas de revisión</h3>
+    <div class="hint" style="color:var(--muted);font-size:12.5px;margin-bottom:10px">La revisión es de todo el turno (todas las referencias). Cada mesa es una pareja. Reparte entre las mesas la meta del turno: <b>${C.fmt0(total)}</b> sacos.</div>
+    <div class="field"><label>¿Cuántas mesas?</label><div class="bh-chips bh-mesas-n" id="ms-n">${[1, 2, 3].map(k => `<button type="button" class="bh-chip" data-n="${k}">${k}</button>`).join('')}</div></div>
+    <div id="ms-metas"></div>
+    <div class="hint" id="ms-suma" style="font-size:13px;margin:6px 0"></div>
+    <button type="button" class="btn sm ghost" id="ms-igual">Repartir por igual</button>
+    <div class="modal-actions"><button class="btn ghost" data-act="closeModal">Cancelar</button><button class="btn go" id="ms-ok">Guardar</button></div>`)
+  const caja = document.getElementById('ms-metas')
+  const sumar = () => {
+    const s = metas.reduce((a, v) => a + (+v || 0), 0)
+    document.getElementById('ms-suma').innerHTML = s === total ? `Repartido: <b class="ok">${C.fmt0(s)} de ${C.fmt0(total)}</b> ✓`
+      : `Repartido: <b class="bajo">${C.fmt0(s)} de ${C.fmt0(total)}</b> · ${s < total ? 'faltan ' + C.fmt0(total - s) : 'sobran ' + C.fmt0(s - total)}`
+  }
+  const pintar = () => {
+    document.querySelectorAll('#ms-n [data-n]').forEach(x => x.classList.toggle('on', +x.dataset.n === n))
+    caja.innerHTML = metas.map((v, j) => `<div class="field bh-mesa-meta"><label>Mesa ${j + 1} · sacos del turno</label>
+      <input type="number" min="1" step="1" inputmode="numeric" data-j="${j}" value="${v || ''}"><span class="muted">≈ ${metaTxt(metaHoraMesa(+v || 0))}/h</span></div>`).join('')
+    sumar()
+  }
+  document.getElementById('ms-n').addEventListener('click', e => { const x = e.target.closest('[data-n]'); if (!x) return; n = +x.dataset.n; metas = igual(n); pintar() })
+  document.getElementById('ms-igual').addEventListener('click', () => { metas = igual(n); pintar() })
+  caja.addEventListener('input', e => {
+    const j = e.target.dataset.j; if (j == null) return
+    metas[+j] = +e.target.value || 0
+    e.target.nextElementSibling.textContent = `≈ ${metaTxt(metaHoraMesa(metas[+j]))}/h`
+    sumar()
+  })
+  pintar()
+  document.getElementById('ms-ok').addEventListener('click', () => {
+    if (metas.some(v => !(v > 0))) { C.toast('Cada mesa necesita su meta.'); return }
+    const s = metas.reduce((a, v) => a + v, 0)
+    if (s !== total) { C.toast(`Las mesas deben sumar la meta del turno (${C.fmt0(total)}). Van ${C.fmt0(s)}.`); return }
+    const hojaId = antes.length ? antes[0].hoja_id : hojaActual
+    const sobran = antes.filter(b => b.mesa > n)
+    const guardar = () => {
+      metas.forEach((v, j) => {
+        const b = antes.find(x => x.mesa === j + 1)
+        const fila = { ...(b || { id: uid(), turno_id: T.turno.id, hoja_id: hojaId, operacion: 'Revisión', area: null, ref: null, orden: 900 + j }),
+          pareja: true, mesa: j + 1, meta_mesa: v, meta_hora: metaHoraMesa(v), meta_origen: 'mesa' }
+        cambio('bh_bloques', 'upsert', fila)
+      })
+      sobran.forEach(b => cambio('bh_bloques', 'delete', { id: b.id }))
+      C.closeModal(); pintarTurno()
+      // Si una mesa nueva no tiene gente, se pide de una vez.
+      const vacia = mesasDe().find(b => !T.asig.some(a => a.bloque_id === b.id))
+      if (vacia) modalPersonas(vacia.id)
+    }
+    const conGente = sobran.filter(b => T.asig.some(a => a.bloque_id === b.id))
+    if (conGente.length) confirmar('Quitar mesas', `Pasas a ${n} ${n === 1 ? 'mesa' : 'mesas'}: se quita ${conGente.map(b => 'la Mesa ' + b.mesa).join(' y ')} con sus personas y horas registradas. ¿Seguir?`, guardar)
+    else guardar()
+  })
+}
+// Si cambia la meta del turno (o el turno), las mesas conservan su proporción.
+function reescalarMesas() {
+  const mesas = mesasDe(), total = +T.turno.meta_turno || 0
+  const suma = mesas.reduce((s, b) => s + (+b.meta_mesa || 0), 0)
+  if (!mesas.length || !total || !suma) return
+  const nuevas = mesas.map(b => Math.max(1, Math.round(b.meta_mesa * total / suma)))
+  nuevas[0] += total - nuevas.reduce((s, v) => s + v, 0)
+  mesas.forEach((b, j) => cambio('bh_bloques', 'upsert', { ...b, meta_mesa: nuevas[j], meta_hora: metaHoraMesa(nuevas[j]) }))
 }
 
 /* ---------- línea Manguita ---------- */
@@ -1411,8 +1509,8 @@ function pintarManguita(hoja, bloques, res, horas, ed, agregar = false) {
 }
 
 function pintarBloque(b, r, horas, ed, esCuello, hermanos = []) {
-  const meta = sinHoras(b) ? metaEspecialTxt(b) : b.meta_hora != null ? `${C.fmt(b.meta_hora, b.meta_hora % 1 ? 1 : 0)}/h` : 'sin meta'
-  const origen = { estudio: ['si', 'Métodos y Tiempos'], manual: ['inc', 'Manual'], turno: ['man', 'Meta del turno'], promedio: ['man', 'Promedio del grupo'] }[b.meta_origen] || ['inc', 'Manual']
+  const meta = esMesa(b) ? `${C.fmt0(b.meta_mesa)} del turno (${metaTxt(b.meta_hora)}/h)` : sinHoras(b) ? metaEspecialTxt(b) : b.meta_hora != null ? `${C.fmt(b.meta_hora, b.meta_hora % 1 ? 1 : 0)}/h` : 'sin meta'
+  const origen = { estudio: ['si', 'Métodos y Tiempos'], manual: ['inc', 'Manual'], turno: ['man', 'Meta del turno'], promedio: ['man', 'Promedio del grupo'], mesa: ['man', 'Meta del turno repartida'] }[b.meta_origen] || ['inc', 'Manual']
   const lleno = r.asig.length >= MAX_PERSONAS(b)
   // Con el DD5 van las personas de pie de máquina.
   const botonPie = ed && b.operacion === 'DD5' && !hermanos.some(x => x.operacion === PIE) ? `<button class="btn sm ghost" data-a="pieMaquina">+ Pie de máquina</button>` : ''
@@ -1430,7 +1528,7 @@ function pintarBloque(b, r, horas, ed, esCuello, hermanos = []) {
   </div>`
   const contraido = colapsados.has(b.id)
   const titulo = `<button class="bh-toggle" data-a="toggleBloque" data-id="${b.id}" title="${contraido ? 'Ver personas' : 'Ocultar personas'}">
-        <span class="bh-chev">${contraido ? '▸' : '▾'}</span><h2>${C.esc(b.operacion)}</h2><span class="muted" style="font-size:12px">${r.asig.length} pers.</span></button>`
+        <span class="bh-chev">${contraido ? '▸' : '▾'}</span><h2>${C.esc(nombreBloque(b))}</h2><span class="muted" style="font-size:12px">${r.asig.length} pers.</span></button>`
   if (contraido) return `
   <div class="section bh-bloque contraido ${esCuello ? 'cuello' : ''}">
     <div class="bh-bloque-head">
@@ -1453,8 +1551,8 @@ function pintarBloque(b, r, horas, ed, esCuello, hermanos = []) {
         · Total <b>${C.fmt0(r.total)}</b> · Eficiencia <b class="${efClase(r.ef)}">${pct(r.ef)}</b>${b.pareja ? ' · <span class="pill man">En pareja</span>' : ''}</div></div>
       ${ed ? `<div class="controls" style="margin:0">${lleno ? '' : `<button class="btn sm go" data-a="personas" data-id="${b.id}">+ Persona</button>`}
         ${botonPie}
-        <button class="btn sm ghost" data-a="editarBloque" data-id="${b.id}">✎ Editar</button>
-        <button class="btn sm ghost danger" data-a="quitarBloque" data-id="${b.id}">Quitar</button></div>` : ''}
+        ${esMesa(b) ? '' : `<button class="btn sm ghost" data-a="editarBloque" data-id="${b.id}">✎ Editar</button>
+        <button class="btn sm ghost danger" data-a="quitarBloque" data-id="${b.id}">Quitar</button>`}</div>` : ''}
     </div>
     ${b.pareja ? '<div class="hint" style="margin:0 0 6px">Las dos personas revisan el mismo saco: se anota una sola cantidad por hora para la pareja y las dos quedan con la misma eficiencia.</div>' : ''}
     <div class="tablebox bh-grid"><table>
@@ -1672,7 +1770,7 @@ function modalOperacion(bloqueId) {
   const tipo = n => C.m1.tipoOf(n)
   const resto = C.m1.opList().map(o => o.nombre).filter(n => !delCodigo.includes(n) && n !== LIDER)
   // Las operaciones que ya están en esta referencia no se repiten (salvo la que se está editando). Manguita va aparte.
-  const ya = new Set(T.bloques.filter(x => x.hoja_id === hoja.id && x.area !== MANGUITA && (!b || x.id !== b.id)).map(x => x.operacion))
+  const ya = new Set(T.bloques.filter(x => x.hoja_id === hoja.id && x.area !== MANGUITA && !esMesa(x) && (!b || x.id !== b.id)).map(x => x.operacion))
   delCodigo.sort((x, y) => (tipo(x) === 'Costura' ? 0 : 1) - (tipo(y) === 'Costura' ? 0 : 1))
   // Se puede escribir para buscar: la lista se filtra (sin importar tildes ni mayúsculas).
   const sinTilde = t => String(t).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
@@ -1714,7 +1812,11 @@ function modalOperacion(bloqueId) {
       : tipoMeta === 'turno' ? 'Va con la meta de la línea: solo agrega los nombres. Se califica al terminar con lo fabricado del turno ÷ meta del turno.'
       : tipoMeta === 'promedio' ? 'Máximo 2 personas. Su eficiencia es la eficiencia promedio del DD5 en el turno.'
       : m != null ? 'Meta escrita a mano: vale solo para este turno.' : 'Esta operación no tiene tiempo estudiado para esta referencia: escribe la meta (vale solo para este turno).'
-    if (esPareja(n)) hint.innerHTML += ' <b>Revisión va en pareja:</b> 2 personas, una sola cantidad por hora para las dos (la meta es de la pareja).'
+    if (esPareja(n) && !b) {
+      document.getElementById('op-tipo').innerHTML = '<span class="pill man">Meta del turno repartida por mesas</span>'
+      document.getElementById('op-metabox').hidden = true
+      hint.innerHTML = `<b>Revisión es de todo el turno</b> (todas las referencias). Al seguir eliges 1, 2 o 3 mesas, cada una en pareja, y repartes la meta del turno entre ellas.${mesasDe().length ? ' Este turno ya tiene mesas: se abren para editarlas.' : ''}`
+    } else if (esPareja(n)) hint.innerHTML += ' <b>Revisión va en pareja:</b> 2 personas, una sola cantidad por hora para las dos (la meta es de la pareja).'
   }
   document.getElementById('op-tipo').addEventListener('click', e => { const x = e.target.closest('[data-t]'); if (!x) return; tipoMeta = x.dataset.t; refrescar(false); if (tipoMeta === 'manual') meta.focus() })
   if (b) sel.value = b.operacion
@@ -1733,6 +1835,8 @@ function modalOperacion(bloqueId) {
   refrescar(false)
   document.getElementById('op-ok').addEventListener('click', () => {
     const nombre = op(); if (!nombre) { C.toast('Elige la operación.'); return }
+    // Revisión nueva: va por mesas del turno.
+    if (esPareja(nombre) && !b) { C.closeModal(); modalMesas(); return }
     let mv = null
     if (tipoMeta === 'estudio') mv = metaEstudio(hoja.codigo, nombre)
     else if (tipoMeta === 'manual') {
@@ -1835,7 +1939,7 @@ function modalPersonas(bloqueId, despues) {
   const enTurno = new Set(T.asig.map(a => a.cedula))
   const elegidos = new Set()
   const cupo = MAX_PERSONAS(b) - ya.size
-  C.openModal(`<h3>Personas en ${C.esc(b.operacion)}</h3>
+  C.openModal(`<h3>Personas en ${C.esc(nombreBloque(b))}</h3>
     ${Number.isFinite(cupo) ? `<div class="hint" style="color:var(--muted);font-size:12.5px;margin-bottom:8px">${b.pareja ? 'Revisión va en pareja: ' : ''}máximo ${MAX_PERSONAS(b)} personas${ya.size ? ` (ya hay ${ya.size})` : ''}.</div>` : ''}
     <input class="search" style="width:100%" type="search" id="pe-q" placeholder="Buscar por nombre o cédula…" autocomplete="off">
     <div class="hlist" id="pe-res"></div>
@@ -2052,6 +2156,7 @@ function modalEditarTurno() {
       if (fuera) { C.toast(`El turno nuevo tiene menos horas y hay ${fuera} registro(s) en las horas que sobran. Bórralos primero.`); return }
     }
     cambio('bh_turnos', 'update', { set, match: { id: t.id } })
+    reescalarMesas()
     fechaLista = set.fecha
     C.closeModal(); C.toast('Turno actualizado.'); pintarTurno()
   })
@@ -2145,7 +2250,9 @@ function modalMetaTurno() {
   document.getElementById('mt-ok').addEventListener('click', () => {
     const v = +i.value; if (!v || v <= 0) { C.toast('Escribe la meta del turno.'); return }
     cambio('bh_turnos', 'update', { set: { meta_turno: v }, match: { id: T.turno.id } })
+    reescalarMesas()
     C.closeModal(); pintarTurno()
+    if (mesasDe().length > 1) C.toast('Las mesas de revisión se ajustaron a la nueva meta en la misma proporción. Revísalas en ✎ Mesas y metas.', 5000)
   })
 }
 
@@ -2226,7 +2333,8 @@ async function onClick(e) {
     }
     case 'referencia': return modalReferencia()
     case 'operacion': return modalOperacion()
-    case 'editarBloque': return modalOperacion(id)
+    case 'editarBloque': return esMesa(T.bloques.find(y => y.id === id) || {}) ? modalMesas() : modalOperacion(id)
+    case 'mesas': return modalMesas()
     case 'personas': return modalPersonas(id)
     case 'pieMaquina': { const h = T.hojas.find(y => y.id === hojaActual); return h && agregarPie(h) }
     case 'mgPersona': return modalManguita()
@@ -2256,7 +2364,14 @@ async function onClick(e) {
     }
     case 'quitarHoja': {
       const h = T.hojas.find(y => y.id === hojaActual)
-      return confirmar('Quitar referencia', `¿Quitar <b>${C.esc(h.codigo)}</b> de este turno con todas sus operaciones y registros?`, () => cambio('bh_hojas', 'delete', { id: h.id }))
+      // La revisión es del turno: si sus mesas están guardadas en esta hoja, pasan a otra antes de quitarla.
+      const otra = T.hojas.find(y => y.id !== h.id)
+      const mesas = mesasDe().filter(b => b.hoja_id === h.id)
+      const aviso = mesas.length ? (otra ? ' La revisión del turno se conserva.' : ' Como es la única referencia, también se quita la revisión del turno.') : ''
+      return confirmar('Quitar referencia', `¿Quitar <b>${C.esc(h.codigo)}</b> de este turno con todas sus operaciones y registros?${aviso}`, () => {
+        if (otra) mesas.forEach(b => cambio('bh_bloques', 'upsert', { ...b, hoja_id: otra.id }))
+        cambio('bh_hojas', 'delete', { id: h.id })
+      })
     }
   }
 }
