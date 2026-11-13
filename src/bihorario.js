@@ -1340,7 +1340,7 @@ function pintarHoja(hoja, ed) {
     <div class="bh-banda" style="--hc:${colorHoja.get(hoja.id)};margin:0"><b class="mono">${C.esc(hoja.codigo)}</b>${hoja.pedido ? `<span>· Pedido <b>${C.esc(hoja.pedido)}</b></span>` : ''}
       <span>· ${C.esc([c.descripcion, c.linea ? 'Línea ' + c.linea : ''].filter(Boolean).join(' · '))}</span></div>
     <div class="controls" style="margin:0">
-      ${ed ? `<button class="btn sm ghost" data-a="editarHoja" data-id="${hoja.id}">✎ Cambiar código</button>` : ''}
+      ${ed ? `<button class="btn sm ghost" data-a="editarHoja" data-id="${hoja.id}">✎ Cambiar pedido</button>` : ''}
       ${mapa ? botonProyeccion() : ''}
       ${bloques.length ? `<button class="btn sm ${mapa ? 'go' : 'ghost'}" data-a="toggleMapa">${mapa ? '☰ Ver detalle' : '▦ Ver mapa'}</button>` : ''}
     </div>
@@ -1696,8 +1696,9 @@ async function cargarPedidos() {
 function modalReferencia(hojaEditar) {
   const cods = C.m1.codigos()
   const he = hojaEditar ? T.hojas.find(h => h.id === hojaEditar) : null
-  let modo = he ? 'codigo' : 'pedido', pedidoManual = ''
-  C.openModal(`<h3>${he ? 'Cambiar código de la referencia' : 'Agregar referencia'}</h3>
+  // El código va amarrado al pedido: al cambiar, se busca el pedido y el código sale de él.
+  let modo = 'pedido', pedidoManual = ''
+  C.openModal(`<h3>${he ? 'Cambiar pedido de la referencia' : 'Agregar referencia'}</h3>
     <div class="hint" id="rf-hint" style="color:var(--muted);font-size:12.5px"></div>
     <input class="search" style="width:100%;margin-top:10px" type="search" id="rf-q" autocomplete="off">
     <div class="hlist" id="rf-res"></div>`, true)
@@ -1708,9 +1709,10 @@ function modalReferencia(hojaEditar) {
     const q = document.getElementById('rf-q')
     q.value = ''; q.inputMode = m === 'pedido' ? 'numeric' : 'text'
     q.placeholder = m === 'pedido' ? 'Número de pedido (ej: 8868)' : 'Buscar código o cliente…'
-    document.getElementById('rf-hint').innerHTML = he ? `Hoy es <b class="mono">${C.esc(he.codigo)}</b>. Se conservan las operaciones, personas y horas registradas; las metas de Métodos y Tiempos se recalculan con el código nuevo.`
+    const hoy = he ? `Hoy: pedido <b>${C.esc(he.pedido || 'sin pedido')}</b> · código <b class="mono">${C.esc(he.codigo)}</b>. Se conservan las operaciones, personas y horas registradas; si el código cambia, las metas de Métodos y Tiempos se recalculan.<br>` : ''
+    document.getElementById('rf-hint').innerHTML = hoy + (he && m === 'pedido' ? 'Escribe el <b>número de pedido</b> correcto.'
       : m === 'pedido' ? 'Escribe el <b>número de pedido</b> que se va a trabajar. Si cambian de pedido en el turno, se agrega otra referencia.'
-      : `El pedido <b>${C.esc(pedidoManual || '—')}</b> no está cargado: escoge la referencia (código del saco). El número de pedido queda anotado.`
+      : `El pedido <b>${C.esc(pedidoManual || '—')}</b> no está cargado: escoge la referencia (código del saco). El número de pedido queda anotado.`)
     draw(''); setTimeout(() => q.focus(), 50)
   }
   const draw = q => {
@@ -1741,8 +1743,9 @@ function modalReferencia(hojaEditar) {
   document.getElementById('rf-res').addEventListener('click', e => {
     const x = e.target.closest('[data-ref]'); if (!x) return
     if (he) {
-      const nuevo = x.dataset.ref
-      cambio('bh_hojas', 'upsert', { ...he, codigo: nuevo })
+      const nuevo = x.dataset.ref, ped = x.dataset.ped || null
+      cambio('bh_hojas', 'upsert', { ...he, codigo: nuevo, pedido: ped })
+      if (nuevo === he.codigo) { C.closeModal(); pintarTurno(); C.toast(`Pedido cambiado a ${ped || '—'}.`); return }
       // Las metas del estudio dependen del código: se recalculan; si el código nuevo
       // no tiene esa operación estudiada, la meta se conserva como manual.
       const sinEstudio = []
@@ -1752,7 +1755,7 @@ function modalReferencia(hojaEditar) {
         else { cambio('bh_bloques', 'upsert', { ...b, meta_origen: 'manual' }); sinEstudio.push(b.operacion) }
       })
       C.closeModal(); pintarTurno()
-      C.toast(sinEstudio.length ? `Código cambiado. Sin estudio en el código nuevo (quedan con meta manual): ${sinEstudio.join(', ')}.` : 'Código cambiado.')
+      C.toast(sinEstudio.length ? `Pedido cambiado (código nuevo). Sin estudio en el código nuevo (quedan con meta manual): ${sinEstudio.join(', ')}.` : `Pedido cambiado a ${ped || '—'} (código ${nuevo}).`)
       return
     }
     const fila = { id: uid(), turno_id: T.turno.id, codigo: x.dataset.ref, pedido: x.dataset.ped || null, orden: T.hojas.length }
