@@ -6,6 +6,7 @@
 //
 // Los cambios se guardan primero en el equipo (cola en localStorage) y se
 // envían a Supabase en orden; si no hay señal, se reintentan solos.
+import * as corte from './corte.js'
 
 let C = null            // contexto que entrega main.js
 let el = null           // contenedor del módulo
@@ -603,7 +604,7 @@ async function pintarLista() {
   const s = C.supabase
   let turnos = [], error = null
   // Turnos, Vista general y Personas muestran los turnos de la fecha escogida.
-  if (vistaLista !== 'pedidos') {
+  if (vistaLista !== 'pedidos' && vistaLista !== 'corte') {
     const r = await s.from('bh_turnos').select('*').eq('fecha', fechaLista).order('created_at'); turnos = r.data || []; error = r.error
   }
   const dia = await cargarDia(turnos)
@@ -611,13 +612,14 @@ async function pintarLista() {
   let pendientes = []
   if (esStaff()) { try { pendientes = await turnosSinTerminar(C.role() === 'admin' ? null : yo) } catch (e) { pendientes = [] } }
   const cuerpoPedidos = vistaLista === 'pedidos' ? await pintarPedidos() : ''
-  const tabs = [['turnos', 'Turnos'], ['planta', 'Vista general del día'], ['personas', 'Personas'], ['pedidos', 'Pedidos']]
+  const tabs = [['turnos', 'Turnos'], ['planta', 'Vista general del día'], ['personas', 'Personas'], ['corte', 'Corte de componentes'], ['pedidos', 'Pedidos']]
+  const esCorte = vistaLista === 'corte'
   el.innerHTML = `
   <div class="bh-head">
-    <div><h2>Bi-horario</h2><div class="hint">${vistaLista === 'planta' ? 'Todos los turnos del día, por línea, cada operación hora a hora.' : vistaLista === 'personas' ? 'La eficiencia de cada operario en los turnos del día.' : vistaLista === 'pedidos' ? 'Todo lo que se ha fabricado de un pedido.' : 'Los turnos del día, ordenados por línea.'}</div></div>
+    <div><h2>Bi-horario</h2><div class="hint">${esCorte ? 'Corte de componentes: lo que hizo cada máquina en cada turno.' : vistaLista === 'planta' ? 'Todos los turnos del día, por línea, cada operación hora a hora.' : vistaLista === 'personas' ? 'La eficiencia de cada operario en los turnos del día.' : vistaLista === 'pedidos' ? 'Todo lo que se ha fabricado de un pedido.' : 'Los turnos del día, ordenados por línea.'}</div></div>
     <div class="controls" style="margin:0">
-      ${vistaLista !== 'pedidos' ? `<input type="date" id="bh-fecha" value="${fechaLista}">` : ''}
-      ${esStaff() ? '<button class="btn go" data-a="nuevoTurno">+ Abrir turno</button>' : ''}
+      ${vistaLista !== 'pedidos' && !esCorte ? `<input type="date" id="bh-fecha" value="${fechaLista}">` : ''}
+      ${esStaff() && !esCorte ? '<button class="btn go" data-a="nuevoTurno">+ Abrir turno</button>' : ''}
     </div>
   </div>
   ${esCalidad() ? '' : `<nav class="tabs" style="position:static;margin:0 0 14px;border-radius:10px;border:1px solid var(--line)">
@@ -625,8 +627,9 @@ async function pintarLista() {
   </nav>`}
   ${error ? '<div class="banner">Sin señal: no se pudo traer la lista de turnos.</div>' : ''}
   ${C.role() !== 'admin' ? avisoPendientes(pendientes, true) : ''}
-  ${vistaLista === 'pedidos' ? cuerpoPedidos : vistaLista === 'planta' ? pintarPlanta(turnos, dia) : vistaLista === 'personas' ? pintarPersonasDia(turnos, dia) : pintarTurnosPorLinea(turnos, dia)}
+  ${esCorte ? '<div id="ct-app"></div>' : vistaLista === 'pedidos' ? cuerpoPedidos : vistaLista === 'planta' ? pintarPlanta(turnos, dia) : vistaLista === 'personas' ? pintarPersonasDia(turnos, dia) : pintarTurnosPorLinea(turnos, dia)}
   ${C.role() === 'admin' ? resumenPendientesAdmin(pendientes) : ''}`
+  if (esCorte) corte.pintar(document.getElementById('ct-app'), C)
   const f = document.getElementById('bh-fecha'); if (f) f.addEventListener('change', e => { fechaLista = e.target.value || hoyISO(); pintarLista() })
   const bp = document.getElementById('bh-ped'); if (bp) {
     const buscar = () => { pedidoBuscado = bp.value.trim(); pintarLista() }
