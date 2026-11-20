@@ -181,7 +181,7 @@ function renderResumen() {
 
   <div class="section">
     <h2>Producción futura — cobertura de tiempos</h2>
-    <div class="hint">Todos los códigos que vienen de hoy en adelante según el plan (MAESTRO_PROG), hasta ${esc(maxUlt())}. Corte del plan: ${esc(D.corte_planning)}.</div>
+    <div class="hint">Todos los códigos que vienen de hoy en adelante según la programación de piso (PROG PISO del Planning), hasta ${esc(maxUlt())}. Corte del plan: ${esc(D.corte_planning)}.</div>
     <div class="grid kpis" style="margin-bottom:14px">
       <div class="kpi accent click" data-tab-go="futura" title="Ver todos"><div class="label">Códigos a fabricar</div><div class="value">${fmt0(fut.length)}</div><div class="sub">toca para ver la lista →</div></div>
       <div class="kpi good"><div class="label">Con tiempos completos</div><div class="value">${pct}%</div><div class="sub">${fComp} códigos</div></div>
@@ -202,7 +202,7 @@ function renderResumen() {
 
   <div class="section">
     <h2>Para actualizar el plan</h2>
-    <div class="hint">La producción futura es una foto del plan. Cuando cambie en Teams, súbeme el MAESTRO_PROG y lo recargo. El resto del panel (códigos, tiempos, operaciones) vive permanente aquí.</div>
+    <div class="hint">La producción futura es una foto del plan. Se actualiza en Cargar archivos con el PLANNING SUPER SACOS (hoja PROG PISO). El resto del panel (códigos, tiempos, operaciones) vive permanente aquí.</div>
   </div>`
 }
 
@@ -981,7 +981,7 @@ bihorario.init(ctx)
 personal.init(ctx)
 marcador.init(ctx)
 // Después de cargar un archivo se refresca lo que depende de él.
-cargas.init({ ...ctx, alCargar: k => { if (k === 'plan') loadAll(); if (k === 'programacion') bihorario.recargarOperarios() } })
+cargas.init({ ...ctx, alCargar: k => { if (k === 'pedidos') loadAll(); if (k === 'programacion') bihorario.recargarOperarios() } })
 
 /* ---------- login / roles (Supabase Auth) ---------- */
 function setRole(perfil) {
